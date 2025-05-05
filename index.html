@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en" style="width: 100%; height: 100%">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My 3D Game</title>
+    <style>
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            margin: 0;
+            background-color: #000;
+        }
+        #renderDiv {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            display: block;
+            padding: 0;
+            border: none;
+        }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://esm.sh/three@0.161.0?dev",
+            "three/": "https://esm.sh/three@0.161.0&dev/",
+            "game": "./game.js",
+            "player": "./player.js",
+            "inputHandler": "./inputHandler.js",
+            "environment": "./environment.js",
+            "sceneSetup": "./sceneSetup.js",
+            "UIManager": "./UIManager.js",
+            "MenuEffects": "./MenuEffects.js",
+            "particles": "./particles.js"
+        }
+    }
+    </script>
+
+</head>
+<body style="width: 100%; height: 100%; overflow: hidden; margin: 0;">
+    <div id="renderDiv"></div>
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
