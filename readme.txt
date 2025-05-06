@@ -10,6 +10,11 @@ Current Features
 - Basic UI
 - Knight Asset
 
+New Features
+- Trees
+- Volume Control
+- Camera Sensitivity 
+
 Work-in-Progress 
 - Assets
 - Health and Mana Bar

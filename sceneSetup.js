@@ -6,7 +6,8 @@ export function setupScene(scene) {
     scene.add(ambientLight);
 
     // Directional Light (Sun)
-    const directionalLight = new THREE.DirectionalLight(0xffeeb1, 1.5); // Warm sunlight
+    // Slightly increase intensity to work better with bloom threshold
+    const directionalLight = new THREE.DirectionalLight(0xffeeb1, 1.8); // Warm sunlight, slightly brighter
     directionalLight.position.set(15, 30, 20);
     directionalLight.castShadow = true;
     directionalLight.shadow.mapSize.width = 2048;

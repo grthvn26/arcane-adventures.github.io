@@ -8,13 +8,20 @@ export class UIManager {
         this.mainMenuElement = null; // Added for main menu
         this.statusBarContainer = null; // Store ref for status bars
         this.hotbarContainer = null; // Store ref for hotbar
+        this.settingsPanelElement = null; // Added for settings panel
+        this.volumeSlider = null; // Reference to the volume slider input
+        this.volumeValueLabel = null; // Reference to the volume value label
+        this.sensitivitySlider = null; // For camera sensitivity
+        this.sensitivityValueLabel = null; // For sensitivity value display
+        // this.bloomToggle = null; // REMOVED
+        // this.vignetteToggle = null; // REMOVED
         this._createStyles();
         this._createUIContainer();
         this._createMainMenu(); // Create menu first
+        this._createSettingsPanel(); // Create settings panel
         this._createBars();
         this._createHotbar();
     }
-
     _createStyles() {
         const style = document.createElement('style');
         style.textContent = `
@@ -215,6 +222,140 @@ export class UIManager {
                      min-width: 150px; /* Adjust responsive button width */
                  }
              }
+             /* Settings Panel Styles */
+            .settings-panel {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(10, 10, 20, 0.9); /* Slightly darker overlay */
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                gap: 20px; /* Adjusted gap */
+                z-index: 110; /* Above main menu */
+                opacity: 1;
+                transition: opacity 0.4s ease-out, visibility 0s linear 0.4s; /* Delay visibility change */
+                pointer-events: none;
+                visibility: hidden;
+                font-family: 'Garamond', serif;
+                box-sizing: border-box;
+                padding: 20px;
+            }
+            .settings-panel.visible {
+                opacity: 1;
+                pointer-events: all;
+                visibility: visible;
+                transition: opacity 0.4s ease-out;
+            }
+             .settings-title {
+                 font-size: 2.8em; /* Larger title */
+                 color: #e0d6b3; /* Parchment title */
+                 font-family: 'Garamond', serif;
+                 text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.8);
+                 margin-bottom: 20px;
+            }
+            .settings-section {
+                background: rgba(30, 25, 20, 0.5); /* Subtle background for sections */
+                padding: 15px;
+                border-radius: 8px;
+                border: 1px solid rgba(168, 148, 104, 0.3); /* Faint border */
+                width: 90%;
+                max-width: 400px; /* Max width for content */
+                box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            }
+            .settings-section-title {
+                font-size: 1.4em;
+                color: #d4c08c;
+                margin-bottom: 15px;
+                border-bottom: 1px solid rgba(168, 148, 104, 0.2);
+                padding-bottom: 5px;
+            }
+             .setting-item {
+                 display: flex;
+                 flex-direction: column; /* Stack label and control vertically on small screens */
+                 align-items: flex-start; /* Align items to the start */
+                 gap: 8px; /* Gap between label and control */
+                 color: #e0d6b3;
+                 font-size: 1.1em;
+                 margin-bottom: 12px; /* Space between setting items */
+                 width: 100%;
+            }
+             .setting-item label {
+                 /* min-width: 120px; Adjusted */
+                 /* text-align: right; No longer needed with column layout */
+                 font-weight: bold;
+                 color: #d4c08c;
+            }
+            .slider-container {
+                display: flex;
+                align-items: center;
+                width: 100%;
+                gap: 10px;
+            }
+             .setting-item input[type="range"] {
+                 cursor: pointer;
+                 flex-grow: 1; /* Slider takes available space */
+                 height: 10px; /* Make track thicker */
+                 background: rgba(80, 60, 40, 0.5);
+                 border-radius: 5px;
+                 -webkit-appearance: none;
+                 appearance: none;
+             }
+             .setting-item input[type="range"]::-webkit-slider-thumb {
+                 -webkit-appearance: none;
+                 appearance: none;
+                 width: 20px;
+                 height: 20px;
+                 background: #a89468;
+                 border-radius: 50%;
+                 cursor: pointer;
+                 border: 2px solid #e0d6b3;
+             }
+            .setting-item input[type="range"]::-moz-range-thumb {
+                 width: 20px;
+                 height: 20px;
+                 background: #a89468;
+                 border-radius: 50%;
+                 cursor: pointer;
+                 border: 2px solid #e0d6b3;
+            }
+            .setting-item .value-label {
+                 min-width: 40px; /* Space for percentage */
+                 text-align: right;
+                 color: #e0d6b3;
+            }
+            .checkbox-container {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .checkbox-container input[type="checkbox"] {
+                width: 18px;
+                height: 18px;
+                cursor: pointer;
+                accent-color: #a89468; /* Themed checkbox color */
+            }
+            .checkbox-container label {
+                font-weight: normal; /* Normal weight for checkbox labels */
+                 color: #e0d6b3;
+            }
+            /* Back button styled like menu buttons */
+            .settings-back-button {
+                 margin-top: 25px; /* Add space above back button */
+            }
+             @media (min-width: 500px) {
+                .setting-item {
+                    flex-direction: row; /* Horizontal layout on larger screens */
+                    align-items: center;
+                }
+                .setting-item label {
+                    min-width: 150px; /* Give labels more space */
+                    text-align: right;
+                }
+             }
         `;
         document.head.appendChild(style);
     }
@@ -242,6 +383,108 @@ export class UIManager {
         this.mainMenuElement.appendChild(title);
         this.mainMenuElement.appendChild(optionsContainer);
         this.container.appendChild(this.mainMenuElement);
+    }
+    _createSettingsPanel() {
+        this.settingsPanelElement = document.createElement('div');
+        this.settingsPanelElement.className = 'settings-panel'; // Start hidden via CSS (no 'visible' class)
+        const title = document.createElement('h2');
+        title.className = 'settings-title';
+        title.textContent = 'Settings';
+        this.settingsPanelElement.appendChild(title);
+        // --- Controls Section ---
+        const controlsSection = this._createSettingsSection('Controls');
+        // Volume Control
+        const volumeSetting = this._createSliderSetting(
+            'Music Volume:', 'volume-slider', '0', '1', '0.01', '0.3',
+            (slider, label) => { this.volumeSlider = slider; this.volumeValueLabel = label; },
+            value => `${Math.round(parseFloat(value) * 100)}%`
+        );
+        controlsSection.appendChild(volumeSetting);
+        // Sensitivity Control
+        const sensitivitySetting = this._createSliderSetting(
+            'Camera Sensitivity:', 'sensitivity-slider', '0.1', '2', '0.05', '1', // Assuming 1 is default
+            (slider, label) => { this.sensitivitySlider = slider; this.sensitivityValueLabel = label; },
+            value => parseFloat(value).toFixed(2)
+        );
+        controlsSection.appendChild(sensitivitySetting);
+        this.settingsPanelElement.appendChild(controlsSection);
+        // --- Graphics Section ---
+        const graphicsSection = this._createSettingsSection('Graphics');
+        // Bloom Toggle REMOVED
+        // const bloomSetting = this._createCheckboxSetting('Bloom Effect:', 'bloom-toggle', true, (checkbox) => { this.bloomToggle = checkbox; });
+        // graphicsSection.appendChild(bloomSetting);
+        // Vignette Toggle REMOVED
+        // const vignetteSetting = this._createCheckboxSetting('Vignette Effect:', 'vignette-toggle', true, (checkbox) => { this.vignetteToggle = checkbox; });
+        // graphicsSection.appendChild(vignetteSetting);
+        // Only add graphics section if it has content (e.g., if other toggles are added later)
+        // For now, since it's empty, we can conditionally not add it or add it with a "more coming soon" message
+        if (graphicsSection.childElementCount > 1) { // Check if more than just title is present
+            this.settingsPanelElement.appendChild(graphicsSection);
+        } else {
+            // Optionally, you could add a placeholder message if the section is empty.
+            // For now, just don't append an empty section.
+            console.log("Graphics settings section is empty, not adding to panel.");
+        }
+        // --- Back Button ---
+        const backButton = this._createMenuButton('Back', 'settings-back');
+        backButton.classList.add('settings-back-button');
+        this.settingsPanelElement.appendChild(backButton);
+        this.container.appendChild(this.settingsPanelElement);
+    }
+    _createSettingsSection(titleText) {
+        const section = document.createElement('div');
+        section.className = 'settings-section';
+        const title = document.createElement('h3');
+        title.className = 'settings-section-title';
+        title.textContent = titleText;
+        section.appendChild(title);
+        return section;
+    }
+    _createSliderSetting(labelText, sliderId, min, max, step, defaultValue, refCallback, valueFormatCallback) {
+        const settingItem = document.createElement('div');
+        settingItem.className = 'setting-item';
+        const label = document.createElement('label');
+        label.setAttribute('for', sliderId);
+        label.textContent = labelText;
+        const sliderContainer = document.createElement('div');
+        sliderContainer.className = 'slider-container';
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.id = sliderId;
+        slider.min = min;
+        slider.max = max;
+        slider.step = step;
+        slider.value = defaultValue;
+        const valueLabel = document.createElement('span');
+        valueLabel.className = 'value-label';
+        valueLabel.textContent = valueFormatCallback(defaultValue);
+        slider.addEventListener('input', () => {
+            valueLabel.textContent = valueFormatCallback(slider.value);
+        });
+        sliderContainer.appendChild(slider);
+        sliderContainer.appendChild(valueLabel);
+        settingItem.appendChild(label);
+        settingItem.appendChild(sliderContainer);
+        if (refCallback) refCallback(slider, valueLabel);
+        return settingItem;
+    }
+    _createCheckboxSetting(labelText, checkboxId, defaultChecked, refCallback) {
+        const settingItem = document.createElement('div');
+        settingItem.className = 'setting-item'; // Re-use for consistent spacing
+        const checkboxContainer = document.createElement('div');
+        checkboxContainer.className = 'checkbox-container';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = checkboxId;
+        checkbox.checked = defaultChecked;
+        const label = document.createElement('label');
+        label.setAttribute('for', checkboxId);
+        label.textContent = labelText;
+        checkboxContainer.appendChild(checkbox);
+        checkboxContainer.appendChild(label);
+        settingItem.appendChild(checkboxContainer); // Add checkbox container to setting item
+        if (refCallback) refCallback(checkbox);
+        return settingItem;
     }
     _createMenuButton(text, id) {
         const button = document.createElement('button');
@@ -304,6 +547,30 @@ export class UIManager {
            this.mainMenuElement.classList.add('hidden');
         }
     }
+     showSettingsPanel() {
+        if (this.settingsPanelElement) {
+            this.settingsPanelElement.classList.add('visible');
+        }
+         if (this.mainMenuElement) {
+             // Optional: Hide the main menu buttons container while settings are open
+             const optionsContainer = this.mainMenuElement.querySelector('.menu-options');
+             if (optionsContainer) optionsContainer.style.display = 'none';
+             const title = this.mainMenuElement.querySelector('.menu-title');
+             if(title) title.style.display = 'none'; // Hide title too
+         }
+    }
+    hideSettingsPanel() {
+        if (this.settingsPanelElement) {
+             this.settingsPanelElement.classList.remove('visible');
+        }
+         if (this.mainMenuElement) {
+             // Show main menu buttons again
+             const optionsContainer = this.mainMenuElement.querySelector('.menu-options');
+             if (optionsContainer) optionsContainer.style.display = 'flex'; // Assuming it's flex
+             const title = this.mainMenuElement.querySelector('.menu-title');
+             if(title) title.style.display = 'block'; // Show title again
+         }
+    }
     showGameUI() {
         // Show health/mana bars and hotbar (assuming they exist and refs are stored)
         if (this.statusBarContainer) this.statusBarContainer.style.display = 'block';
@@ -314,8 +581,22 @@ export class UIManager {
         if (this.statusBarContainer) this.statusBarContainer.style.display = 'none';
         if (this.hotbarContainer) this.hotbarContainer.style.display = 'none';
     }
+     // --- Getters for Control Elements ---
+    getVolumeSlider() {
+         return this.volumeSlider;
+    }
+    getVolumeValueLabel() {
+        return this.volumeValueLabel;
+    }
+    getSensitivitySlider() {
+        return this.sensitivitySlider;
+    }
+    getSensitivityValueLabel() {
+        return this.sensitivityValueLabel;
+    }
+    // getBloomToggle() REMOVED
+    // getVignetteToggle() REMOVED
     // --- Update Methods ---
-
     updateHealth(currentHealth, maxHealth) {
         const percentage = Math.max(0, Math.min(100, (currentHealth / maxHealth) * 100));
         if (this.healthBarFill) {

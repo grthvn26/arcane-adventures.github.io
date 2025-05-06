@@ -10,11 +10,13 @@ const CAMERA_DISTANCE = 6.0; // Slightly further back
 const CAMERA_HEIGHT = 1.8; // Slightly lower target height
 const CAMERA_LAG = 0.1;
 const ROTATION_SPEED = 10.0;
-const CAMERA_ROTATION_SPEED = 0.005;
+// Default camera rotation speed, will be multiplied by sensitivity
+const BASE_CAMERA_ROTATION_SPEED = 0.005;
 const CAMERA_PITCH_MIN = -Math.PI / 3;
 const CAMERA_PITCH_MAX = Math.PI / 2.5;
 export class Player {
-    constructor(scene, camera) {
+    constructor(game, scene, camera) { // Add game as the first argument
+        this.game = game; // Store the game instance
         this.scene = scene;
         this.camera = camera;
         this.health = 100;
@@ -225,11 +227,18 @@ export class Player {
         return this.mesh.position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT * 0.7, 0)); // Adjust height offset
     }
     _updateCameraRotation(deltaX, deltaY) {
-    this.cameraPhi -= deltaX * CAMERA_ROTATION_SPEED; // Subtract deltaX to invert horizontal rotation
-    this.cameraTheta += deltaY * CAMERA_ROTATION_SPEED; // Keep vertical as is (usually mouse up = look up)
+    const effectiveRotationSpeed = BASE_CAMERA_ROTATION_SPEED * (this.game.settings.cameraSensitivity || 1.0);
+    this.cameraPhi -= deltaX * effectiveRotationSpeed;
+    this.cameraTheta += deltaY * effectiveRotationSpeed;
     // Clamp vertical rotation (theta)
-this.cameraTheta = Math.max(CAMERA_PITCH_MIN, Math.min(CAMERA_PITCH_MAX, this.cameraTheta));
+    this.cameraTheta = Math.max(CAMERA_PITCH_MIN, Math.min(CAMERA_PITCH_MAX, this.cameraTheta));
 }
+// Public method to update sensitivity if game settings change
+// Note: Sensitivity is now read directly from game.settings in _updateCameraRotation
+// So this explicit method might not be strictly needed unless there are other things to update.
+// setCameraSensitivity(sensitivity) {
+    // this.cameraSensitivity = sensitivity; // Store it locally if preferred
+// }
 _calculateCameraOffset() {
     const offset = new THREE.Vector3();
     // Calculate offset using spherical coordinates
@@ -281,6 +290,10 @@ _handleInput(keys, inputHandler, deltaTime) {
             this.velocity.y = JUMP_VELOCITY;
             this.onGround = false;
             this.isJumping = true; // Set jumping flag for animation state
+            // Play jump sound
+             if (this.game && this.game.jumpSound) {
+                this.game.playSoundEffect(this.game.jumpSound);
+            }
             // Animation switch handled in update()
         }
     } else {
@@ -292,18 +305,25 @@ _handleInput(keys, inputHandler, deltaTime) {
     // --- Attack Input ---
     // Still need inputHandler for mouse button data
     const now = this.mixer.time; // Use mixer time for cooldown consistency
-     // --- Temporarily Disabled Attack Trigger ---
-    /*
-     if (inputHandler.mouseButtonDown === 0 && !this.isAttacking && (now - this.lastAttackTime) >= this.attackCooldown) {
+    // --- Attack Trigger Re-enabled ---
+     if (inputHandler.mouseButtonDown === 0 && !this.isAttacking && (now - this.lastAttackTime) >= this.attackCooldown && this.animations['attack']) {
          this.isAttacking = true;
          this.lastAttackTime = now;
-         // Stop current jump animation if attacking mid-air (optional, depends on desired feel)
-         // if (this.animations['jump']?.isRunning()) {
-         //     this.animations['jump'].stop();
-         // }
-         // Animation switch handled in update()
+         // Stop current walk/idle/jump smoothly before attack
+         if (this.currentAction && this.currentAction !== this.animations['attack']) {
+             // Allow jump animation to finish naturally unless attacking
+             if (this.currentAction !== this.animations['jump']) {
+                this.currentAction.fadeOut(0.1);
+             }
+             // If jump is running, let attack override it (handled in animation state switch)
+         }
+         // Play attack sound
+         if (this.game && this.game.attackSound) {
+             this.game.playSoundEffect(this.game.attackSound);
+         }
+        // The actual animation switch is now reliably handled in the main update() animation state section
+         console.log("Attack triggered!"); // DEBUG LOG
      }
-     */
     }
 _applyMovement(deltaTime) {
     // Calculate displacement based on X and Z velocity only
@@ -332,7 +352,35 @@ _applyMovement(deltaTime) {
         } else {
             this.onGround = false;
         }
-        // More complex collision (e.g., with trees) would go here
+        // --- Tree Collision ---
+        if (environment && environment.trees && environment.trees.children.length > 0) {
+            const playerPos2D = new THREE.Vector2(this.mesh.position.x, this.mesh.position.z);
+            const collisionRadius = PLAYER_RADIUS + 0.8; // Player radius + approx tree radius
+            const collisionRadiusSq = collisionRadius * collisionRadius;
+            environment.trees.children.forEach(tree => {
+                // Ensure tree has position data (might not be loaded instantly)
+                if (!tree.position) return;
+                const treePos2D = new THREE.Vector2(tree.position.x, tree.position.z);
+                const distanceSq = playerPos2D.distanceToSquared(treePos2D);
+                if (distanceSq < collisionRadiusSq) {
+                    // Collision detected!
+                    const collisionVector = playerPos2D.clone().sub(treePos2D).normalize();
+                    const pushBackDistance = collisionRadius - Math.sqrt(distanceSq);
+                    // Apply correction directly to mesh position
+                    this.mesh.position.x += collisionVector.x * pushBackDistance;
+                    this.mesh.position.z += collisionVector.y * pushBackDistance; // Vector2 y corresponds to world z
+                    // Optional: Dampen velocity in the direction of the collision (simple approach)
+                    // This helps prevent sticking or jittering in some cases
+                    const velocityCorrection = new THREE.Vector3(collisionVector.x, 0, collisionVector.y);
+                    const velocityInCollisionDir = this.velocity.dot(velocityCorrection);
+                    if (velocityInCollisionDir > 0) { // Only correct if moving towards the tree
+                         // Replace subScaledVector with multiplyScalar and sub
+                         const correctionAmount = velocityCorrection.clone().multiplyScalar(velocityInCollisionDir * 0.5);
+                         this.velocity.sub(correctionAmount); // Reduce velocity into the tree
+                    }
+                }
+            });
+        }
     }
     _updateCamera(deltaTime) {
         if (!this.mesh) return; // Need mesh for camera positioning
