@@ -23,6 +23,10 @@ export class Player {
         this.maxHealth = 100;
         this.mana = 50;
         this.maxMana = 50;
+        this.attackManaCost = 10; // Mana cost per attack
+        this.attackDamage = 15; // Amount of damage player's attack deals
+        this.attackRange = 1.8; // How close player needs to be to hit (adjust to match animation)
+        this.attackAngle = Math.PI / 2.5; // Cone of attack in front of player (90 degrees total, 45 each side)
         this.mesh = null; // Initialize mesh as null, will be loaded async
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.onGround = false;
@@ -31,14 +35,20 @@ export class Player {
         this.currentCameraPosition = new THREE.Vector3();
         this.cameraPhi = 0;
         this.cameraTheta = Math.PI / 6;
+        // Mana Regeneration
+        this.manaRegenRate = 5; // Mana per second
+        this.manaRegenCooldown = 1.5; // Seconds after mana use before regen starts
+        this.lastManaUseTime = -Infinity; // Time mana was last used
         // Animation properties
         this.mixer = null;
         this.animations = {}; // Store actions by name
         this.currentAction = null;
         this.isJumping = false; // Track jump state for animation
         this.isAttacking = false; // Track attack state
+        this.isDefending = false; // Track defense state
         this.attackCooldown = 0.8; // Seconds between attacks
         this.lastAttackTime = -Infinity; // Time of the last attack start
+        this.isAlive = true; // Player starts alive
         this._loadModel();
         this._updateCameraRotation(0, 0); // Initial rotation setup
     }
@@ -66,24 +76,51 @@ export class Player {
              const clips = gltf.animations;
              console.log("Available animations:", clips.map(clip => clip.name)); // DEBUG LOG - List all animation names
              // Find specific clips (adjust names if needed based on the GLB file)
-             const idleClip = THREE.AnimationClip.findByName(clips, 'Idle');
-             const walkClip = THREE.AnimationClip.findByName(clips, 'Walk');
-             const jumpClip = THREE.AnimationClip.findByName(clips, 'Jump');
-             const attackClip = THREE.AnimationClip.findByName(clips, 'Attack'); // Common name for attack
+             let idleClip = THREE.AnimationClip.findByName(clips, 'Idle');
+             if (!idleClip) {
+                 console.warn("'Idle' animation not found. Trying 'Stand'...");
+                 idleClip = THREE.AnimationClip.findByName(clips, 'Stand');
+             }
+             if (!idleClip) {
+                console.warn("'Stand' animation not found. Using the first available animation as idle if present.");
+             }
+             // TPose_Idle check removed
+             if (!idleClip && clips.length > 0) {
+                 console.warn("No specific idle animation ('Idle', 'Stand') found. Using the first available animation as idle: " + clips[0].name);
+                 idleClip = clips[0]; // Use the first animation in the list as a fallback
+             }
+            // --- Find WALK/MOVE Animation ---
+            let primaryMoveClip = THREE.AnimationClip.findByName(clips, 'Walking_B');
+            if (!primaryMoveClip) primaryMoveClip = THREE.AnimationClip.findByName(clips, 'Walk');
+            if (!primaryMoveClip) primaryMoveClip = THREE.AnimationClip.findByName(clips, 'walk');
+            if (!primaryMoveClip) {
+                console.warn("Standard walk animations ('Walking_B', 'Walk', 'walk') not found. Trying running animations for primary movement...");
+                primaryMoveClip = THREE.AnimationClip.findByName(clips, 'Running_A');
+            }
+            if (!primaryMoveClip) primaryMoveClip = THREE.AnimationClip.findByName(clips, 'Run');
+            if (!primaryMoveClip) primaryMoveClip = THREE.AnimationClip.findByName(clips, 'run');
+            // --- End Find WALK/MOVE ---
+            const jumpClip = THREE.AnimationClip.findByName(clips, 'Jump');
+            const attackClip = THREE.AnimationClip.findByName(clips, '1H_Melee_Attack_Slice_Diagonal'); // Changed to user requested attack
+            const attackChopClip = THREE.AnimationClip.findByName(clips, '1H_Melee_Attack_Chop');
+            // Note: The separate 'runClip' loading is removed; its candidates are now part of primaryMoveClip search.
             if (idleClip) {
                  this.animations['idle'] = this.mixer.clipAction(idleClip);
+                 this.animations['idle'].setLoop(THREE.LoopRepeat); // Ensure idle animation loops
                  this.animations['idle'].play(); // Start in idle state
                  this.currentAction = this.animations['idle'];
-                 console.log("Idle animation loaded.");
+                 console.log(`Using '${idleClip.name}' as idle animation.`);
              } else {
-                console.warn("Idle animation not found in model.");
+                console.error("CRITICAL: No suitable idle animation found for the player model. Player may remain in T-pose.");
              }
-             if (walkClip) {
-                this.animations['walk'] = this.mixer.clipAction(walkClip);
-                console.log("Walk animation loaded.");
-             } else {
-                 console.warn("Walk animation not found in model.");
-             }
+            // Load PRIMARY MOVE animation into 'walk' action
+            if (primaryMoveClip) {
+               this.animations['walk'] = this.mixer.clipAction(primaryMoveClip);
+               this.animations['walk'].setLoop(THREE.LoopRepeat); // Ensure movement animations loop
+               console.log(`Primary movement animation loaded into 'walk': ${primaryMoveClip.name}`);
+            } else {
+                console.warn("CRITICAL: No 'walk' (or fallback run) animation found. Player movement may not animate.");
+            }
              if (jumpClip) {
                  this.animations['jump'] = this.mixer.clipAction(jumpClip);
                  this.animations['jump'].setLoop(THREE.LoopOnce); // Jump animation plays once
@@ -106,6 +143,35 @@ export class Player {
              } else {
                  console.warn("Attack animation not found in model.");
              }
+             if (attackChopClip) {
+                this.animations['attack_chop'] = this.mixer.clipAction(attackChopClip);
+                this.animations['attack_chop'].setLoop(THREE.LoopOnce);
+                console.log("1H_Melee_Attack_Chop animation loaded as 'attack_chop'.");
+                // We might need a separate event listener if it behaves differently
+                // For now, it will also reset isAttacking if it's the one playing and finishes.
+             } else {
+                console.warn("1H_Melee_Attack_Chop animation not found in model.");
+             }
+            // The 'runClip' loading block (previously here) has been removed
+            // as its candidates ('Running_A', etc.) are now included in the
+            // 'primaryMoveClip' search logic and loaded into this.animations['walk'].
+            // Load Defend animation (or use Idle as fallback)
+            const defendClip = THREE.AnimationClip.findByName(clips, 'Defend') || THREE.AnimationClip.findByName(clips, 'Block');
+            if (defendClip) {
+                this.animations['defend'] = this.mixer.clipAction(defendClip);
+                this.animations['defend'].setLoop(THREE.LoopRepeat); // Defensive stance usually loops
+                console.log("Defend/Block animation loaded.");
+            } else {
+                // Fallback to Idle if no specific defend animation and Idle exists
+                if (this.animations['idle']) {
+                    this.animations['defend'] = this.animations['idle']; // Use idle as a placeholder
+                    // Ensure the fallback also loops if it's intended for a held state
+                    this.animations['defend'].setLoop(THREE.LoopRepeat); 
+                    console.warn("Defend/Block animation not found in model. Using 'Idle' as placeholder for 'defend'.");
+                } else {
+                    console.warn("Defend/Block animation not found, and Idle animation also not available for fallback for 'defend'.");
+                }
+            }
              // --- End Animation Setup ---
             console.log("Knight model loaded successfully.");
         }, undefined, (error) => {
@@ -127,69 +193,85 @@ export class Player {
     update(deltaTime, keys, inputHandler, environment) {
         // Wait until the mesh and mixer are ready
         if (!this.mesh || !this.mixer) return;
-        // const keys = inputHandler.keys; // No longer needed, keys is passed directly
+        if (!this.isAlive) {
+            // If player is not alive, only update mixer for potential death animation and gravity
+            if (this.mixer) this.mixer.update(deltaTime);
+            this._applyGravity(deltaTime); // Keep applying gravity so they fall
+            this._checkCollisions(environment); // Keep checking collisions (e.g. with ground)
+            // Do not process input or other updates
+            return;
+        }
         this._handleInput(keys, inputHandler, deltaTime); // Pass keys and inputHandler separately
+        this._regenerateMana(deltaTime); // Add mana regeneration
         // --- Animation State ---
-        const isMoving = this.moveDirection.lengthSq() > 0.01;
+        const isMoving = this.moveDirection.lengthSq() > 0.01; // Used for walk/idle when not attacking/defending
         let targetActionName = 'idle'; // Default action
-        // Determine base action (idle or walk) based on movement and ground state
-        // --- Animation State ---
-        // Note: isMoving is already declared above at line 129
-        // Removed duplicate 'let' below
-        targetActionName = 'idle'; // Default action
-        // Prioritize Attack > Jump > Walk/Idle
         if (this.isAttacking && this.animations['attack']) {
             targetActionName = 'attack';
-        } else if (!this.onGround) {
-             // Player is in the air
+        } else if (this.isDefending && this.animations['defend']) {
+            targetActionName = 'defend';
+        } else if (!this.onGround) { // Player is in the air (and not attacking/defending)
             if (this.isJumping && this.animations['jump']) {
-                 targetActionName = 'jump'; // Prioritize jump animation if currently jumping
-            } else {
-                 // Optional: Falling animation could go here
-                 targetActionName = 'idle'; // Fallback to idle while falling
-                 if(this.animations['jump']?.isRunning()){
-                     targetActionName = 'jump'; // Let jump finish if running
-                 }
+                targetActionName = 'jump'; 
+            } else { // Falling or jump animation finished mid-air
+                targetActionName = 'idle'; // Fallback to idle (or a specific falling animation)
+                if (this.animations['jump']?.isRunning()) { // Let jump finish if it was running
+                    targetActionName = 'jump';
+                }
             }
-        } else {
-             // Player is on the ground
+        } else { // Player is on the ground (and not attacking/defending)
             if (isMoving && this.animations['walk']) {
                 targetActionName = 'walk';
             } else {
                 targetActionName = 'idle';
             }
-            // Reset jump flag only when grounded and not attacking
-             if (this.isJumping && !this.isAttacking) {
+            // Reset jump flag only when grounded and not in a higher priority state
+            if (this.isJumping) { 
                 this.isJumping = false;
-                 if(this.animations['jump']) this.animations['jump'].stop();
+                // Don't abruptly stop jump animation if it's fading out or just finished
+                // The animation state logic will handle transitioning away from 'jump'
             }
         }
-        // Switch animation if the target is different and exists
-        // (This if block starting at 163 seems redundant/misplaced after the refactor. Removing it.)
         // Switch animation if the target is different from the current one
         if (this.animations[targetActionName] && this.currentAction !== this.animations[targetActionName]) {
             const nextAction = this.animations[targetActionName];
-            nextAction.reset(); // Reset before playing
+            nextAction.reset(); 
             nextAction.enabled = true;
-            // Special handling for jump: play immediately, don't fade in if coming from ground
-             // Special handling for attack: Play immediately, interrupt others
-             if (targetActionName === 'attack' && this.animations['attack']) {
-                 nextAction.reset().play();
-                 if (this.currentAction && this.currentAction !== nextAction) {
-                     this.currentAction.fadeOut(0.1); // Fade out previous quickly
-                 }
-            } else if (targetActionName === 'jump' && this.animations['jump']) {
-                // Jump also plays immediately but allows attack to interrupt
-                 nextAction.reset().play();
-                 if (this.currentAction && this.currentAction !== nextAction) {
+            if (targetActionName === 'attack') {
+                nextAction.setLoop(THREE.LoopOnce); // Ensure attack plays once
+                nextAction.clampWhenFinished = false; // Don't clamp attack, let it transition out
+                nextAction.play();
+                if (this.currentAction && this.currentAction !== nextAction) {
                     this.currentAction.fadeOut(0.1);
-                 }
-             } else if (this.currentAction) {
-                 // Standard fade for idle/walk transitions
-                this.currentAction.crossFadeTo(nextAction, 0.3, true);
-             } else {
-                 nextAction.play(); // If no current action, play directly
-             }
+                }
+            } else if (targetActionName === 'attack_chop') { // Handle the new attack animation
+                nextAction.setLoop(THREE.LoopOnce);
+                nextAction.clampWhenFinished = false;
+                nextAction.play();
+                if (this.currentAction && this.currentAction !== nextAction) {
+                    this.currentAction.fadeOut(0.1);
+                }
+            } else if (targetActionName === 'defend') {
+                nextAction.setLoop(THREE.LoopRepeat); // Ensure defend loops
+                nextAction.play();
+                if (this.currentAction && this.currentAction !== nextAction) {
+                    this.currentAction.fadeOut(0.2); 
+                }
+            } else if (targetActionName === 'jump') {
+                nextAction.setLoop(THREE.LoopOnce); // Ensure jump plays once
+                nextAction.clampWhenFinished = true; // Jump should hold last frame
+                nextAction.play();
+                if (this.currentAction && this.currentAction !== nextAction) {
+                    this.currentAction.fadeOut(0.1);
+                }
+            } else { // Idle/Walk transitions
+                nextAction.setLoop(THREE.LoopRepeat); // Idle and Walk should loop
+                if (this.currentAction) {
+                    this.currentAction.crossFadeTo(nextAction, 0.3, true);
+                } else {
+                    nextAction.play(); 
+                }
+            }
             this.currentAction = nextAction;
         }
         // --- End Animation State ---
@@ -249,82 +331,92 @@ _calculateCameraOffset() {
 }
 // Updated signature: receives keys directly
 _handleInput(keys, inputHandler, deltaTime) {
-    // --- Camera Rotation Input ---
-    // Still need inputHandler for mouse data
+    if (!this.mesh || !this.mixer) return;
     this._updateCameraRotation(inputHandler.mouseDeltaX, inputHandler.mouseDeltaY);
-    // --- Movement Input ---
-    // Allow movement input only if not currently attacking
-    if (!this.isAttacking) {
-        let forward = 0;
-        let right = 0;
-        // --- DETAILED LOGGING REMOVED ---
-        // console.log(`Key states: w=${keys['w']}, s=${keys['s']}, a=${keys['a']}, d=${keys['d']}, space=${keys[' ']}, arrowup=${keys['arrowup']}, arrowdown=${keys['arrowdown']}, arrowleft=${keys['arrowleft']}, arrowright=${keys['arrowright']}`);
-        if (keys['w'] || keys['arrowup']) { forward += 1; }
-        if (keys['s'] || keys['arrowdown']) { forward -= 1; }
-        if (keys['a'] || keys['arrowleft']) { right += 1; } // Swapped - to +
-        if (keys['d'] || keys['arrowright']) { right -= 1; } // Swapped + to -
-        this.moveDirection.set(right, 0, forward);
-        // Normalize movement input vector
-        if (this.moveDirection.lengthSq() > 0) {
-            this.moveDirection.normalize();
+    const leftMouseDown = inputHandler.mouseButtonDown === 0;
+    const rightMouseDown = inputHandler.mouseButtonDown === 2;
+    const now = this.mixer.time;
+    // --- State Updates based on Input ---
+    // Try to start an attack (Left Click)
+    if (leftMouseDown && !this.isAttacking && !this.isDefending &&
+        (now - this.lastAttackTime) >= this.attackCooldown && this.animations['attack'] &&
+        this.mana >= this.attackManaCost) { // Check for sufficient mana
+        this.isAttacking = true;
+        this.lastAttackTime = now;
+        this.mana -= this.attackManaCost; // Consume mana
+        this.lastManaUseTime = now; // Update last mana use time
+        if (this.game && this.game.uiManager) { // Update UI
+            this.game.uiManager.updateMana(this.mana, this.maxMana);
         }
-         // Calculate world-space velocity based on camera orientation
-        const cameraForward = new THREE.Vector3();
-    this.camera.getWorldDirection(cameraForward);
-    cameraForward.y = 0;
-    cameraForward.normalize();
-    const cameraRight = new THREE.Vector3().crossVectors(this.camera.up, cameraForward).normalize();
-    // Calculate desired velocity in world space
-        const desiredVelocity = new THREE.Vector3();
-        desiredVelocity.addScaledVector(cameraForward, this.moveDirection.z * MOVEMENT_SPEED);
-        // Corrected: Use positive moveDirection.x for cameraRight
-        desiredVelocity.addScaledVector(cameraRight, this.moveDirection.x * MOVEMENT_SPEED);
-        // Assign calculated velocity (keeping existing Y velocity for gravity/jump)
-        // Removed redundant assignment block below
-        this.velocity.x = desiredVelocity.x;
-        this.velocity.z = desiredVelocity.z;
-        // Jump - Allow jumping only if on ground and not attacking
-        // The detailed log above already includes spacebar state.
-        if (keys[' '] && this.onGround && !this.isAttacking) {
-            // console.log("Space detected"); // Redundant with detailed log
-            this.velocity.y = JUMP_VELOCITY;
-            this.onGround = false;
-            this.isJumping = true; // Set jumping flag for animation state
-            // Play jump sound
-             if (this.game && this.game.jumpSound) {
-                this.game.playSoundEffect(this.game.jumpSound);
-            }
-            // Animation switch handled in update()
+        this.isDefending = false; // Attack overrides defense
+        // Play attack sound immediately
+        if (this.game && this.game.attackSound) {
+            this.game.playSoundEffect(this.game.attackSound);
         }
-    } else {
-        // If attacking, stop horizontal movement
+        console.log(`Attack triggered! Playing 'attack'. Mana left: ${this.mana}`); // Specify which attack for now
+        // --- Deal Damage Logic ---
+        this._dealDamage();
+    } else if (leftMouseDown && this.mana < this.attackManaCost && !this.isAttacking && !this.isDefending && 
+               (now - this.lastAttackTime) >= this.attackCooldown && this.animations['attack']) { // Ensure other conditions met before insufficient mana message
+        // Optionally, play a "not enough mana" sound or show a UI message
+        console.log("Not enough mana to attack.");
+        // You could add a brief sound effect here via this.game.playSoundEffect(...)
+        // Or a UI notification if this.game.uiManager.showNotification("Not enough mana!") exists
+    }
+    // Update defending state (Right Click)
+    // Can only start or continue defending if not currently in an attack animation sequence
+    if (rightMouseDown && !this.isAttacking) {
+        this.isDefending = true;
+    } else if (!rightMouseDown && this.isDefending) {
+        // If was defending, but right mouse is no longer down (or another button is, or no button)
+        this.isDefending = false;
+    }
+    // Ensure attack state takes precedence if an attack was just initiated
+    if (this.isAttacking) {
+        this.isDefending = false;
+    }
+    // --- Movement and Jump based on State ---
+    if (this.isAttacking || this.isDefending) {
+        // Stop all horizontal movement if attacking or defending
         this.moveDirection.set(0, 0, 0);
         this.velocity.x = 0;
         this.velocity.z = 0;
+        // Note: Vertical velocity (gravity/jump) is handled separately by _applyGravity
+    } else {
+        // --- Movement Input (only if not attacking or defending) ---
+        let forward = 0;
+        let right = 0;
+        if (keys['w'] || keys['arrowup']) { forward += 1; }
+        if (keys['s'] || keys['arrowdown']) { forward -= 1; }
+        if (keys['a'] || keys['arrowleft']) { right += 1; } 
+        if (keys['d'] || keys['arrowright']) { right -= 1; } 
+        this.moveDirection.set(right, 0, forward);
+        if (this.moveDirection.lengthSq() > 0) {
+            this.moveDirection.normalize();
+        }
+        const cameraForward = new THREE.Vector3();
+        this.camera.getWorldDirection(cameraForward);
+        cameraForward.y = 0;
+        cameraForward.normalize();
+        const cameraRight = new THREE.Vector3().crossVectors(this.camera.up, cameraForward).normalize();
+        
+        const desiredVelocity = new THREE.Vector3();
+        desiredVelocity.addScaledVector(cameraForward, this.moveDirection.z * MOVEMENT_SPEED);
+        desiredVelocity.addScaledVector(cameraRight, this.moveDirection.x * MOVEMENT_SPEED);
+        
+        this.velocity.x = desiredVelocity.x;
+        this.velocity.z = desiredVelocity.z;
+        // --- Jump Input (only if not attacking or defending, and on ground) ---
+        if (keys[' '] && this.onGround) { 
+            this.velocity.y = JUMP_VELOCITY;
+            this.onGround = false;
+            this.isJumping = true;
+            if (this.game && this.game.jumpSound) {
+                this.game.playSoundEffect(this.game.jumpSound);
+            }
+        }
     }
-    // --- Attack Input ---
-    // Still need inputHandler for mouse button data
-    const now = this.mixer.time; // Use mixer time for cooldown consistency
-    // --- Attack Trigger Re-enabled ---
-     if (inputHandler.mouseButtonDown === 0 && !this.isAttacking && (now - this.lastAttackTime) >= this.attackCooldown && this.animations['attack']) {
-         this.isAttacking = true;
-         this.lastAttackTime = now;
-         // Stop current walk/idle/jump smoothly before attack
-         if (this.currentAction && this.currentAction !== this.animations['attack']) {
-             // Allow jump animation to finish naturally unless attacking
-             if (this.currentAction !== this.animations['jump']) {
-                this.currentAction.fadeOut(0.1);
-             }
-             // If jump is running, let attack override it (handled in animation state switch)
-         }
-         // Play attack sound
-         if (this.game && this.game.attackSound) {
-             this.game.playSoundEffect(this.game.attackSound);
-         }
-        // The actual animation switch is now reliably handled in the main update() animation state section
-         console.log("Attack triggered!"); // DEBUG LOG
-     }
-    }
+}
 _applyMovement(deltaTime) {
     // Calculate displacement based on X and Z velocity only
     const displacement = new THREE.Vector3(this.velocity.x, 0, this.velocity.z).multiplyScalar(deltaTime);
@@ -394,5 +486,120 @@ _applyMovement(deltaTime) {
     this.camera.position.copy(this.currentCameraPosition);
     // Always look towards the player's look-at target
     this.camera.lookAt(this._getCameraLookAtTarget());
+    }
+    resetControlsAndCamera() {
+        if (!this.mesh || !this.camera) return;
+        // Reset camera angles to default
+        this.cameraPhi = 0;
+        this.cameraTheta = Math.PI / 6; // Default vertical angle
+        // Apply the reset rotation immediately
+        this._updateCameraRotation(0, 0); // Pass 0,0 as no mouse delta
+        // Reset movement state
+        this.moveDirection.set(0, 0, 0);
+        this.velocity.set(0, 0, 0); // Resetting full velocity, gravity will take over if airborne
+        // Snap camera to the new target position without lag
+        const offset = this._calculateCameraOffset();
+        this.targetCameraPosition.copy(this.mesh.position).add(offset);
+        this.currentCameraPosition.copy(this.targetCameraPosition);
+        this.camera.position.copy(this.currentCameraPosition);
+        this.camera.lookAt(this._getCameraLookAtTarget());
+        // Reset any animation states that might be stuck from a previous state
+        this.isAttacking = false;
+        this.isDefending = false;
+        this.isJumping = false; // Reset jump state
+        // It might be good to force a transition to 'idle' animation here if currentAction is not idle
+        // For now, the update loop's animation logic should handle this on the next frame.
+        console.log("Player controls and camera reset.");
+    }
+    takeDamage(amount) {
+        if (!this.isAlive) return;
+        this.health -= amount;
+        console.log(`Player took ${amount} damage, health is now ${this.health}`);
+        // TODO: Add visual feedback (e.g., screen flash, sound)
+        if (this.health <= 0) {
+            this.health = 0;
+            this.die();
+        }
+        // Update UI immediately
+        if (this.game && this.game.uiManager) {
+            this.game.uiManager.updateHealth(this.health, this.maxHealth);
+        }
+    }
+    die() {
+        if (!this.isAlive) return;
+        this.isAlive = false;
+        console.log("Player has died.");
+        // Stop current action and play death animation if available
+        if (this.animations['death']) {
+            // A more robust playAnimation method for player would be good, similar to Enemy's.
+            // For now, let's try a simplified direct play.
+            const deathAction = this.animations['death'];
+            deathAction.reset();
+            deathAction.setLoop(THREE.LoopOnce);
+            deathAction.clampWhenFinished = true; // Hold last frame of death animation
+            deathAction.enabled = true;
+            if (this.currentAction) {
+                this.currentAction.crossFadeTo(deathAction, 0.2, true);
+            } else {
+                deathAction.play();
+            }
+            this.currentAction = deathAction;
+            console.log("Playing player death animation.");
+        } else {
+            // If no death animation, maybe just transition to idle to stop other anims
+             if (this.animations['idle'] && this.currentAction !== this.animations['idle']) {
+                const idleAction = this.animations['idle'];
+                idleAction.reset();
+                idleAction.play();
+                if (this.currentAction) {
+                    this.currentAction.crossFadeTo(idleAction, 0.2, true);
+                }
+                this.currentAction = idleAction;
+            }
+            console.log("Player death: No death animation, stopping other animations.");
+        }
+        // Notify the game instance that the player has died
+        if (this.game) {
+            this.game.gameOver();
+        }
+    }
+    _dealDamage() {
+        if (!this.game || !this.game.enemies || !this.mesh) return;
+        const playerPosition = this.mesh.position;
+        const playerForward = new THREE.Vector3();
+        this.mesh.getWorldDirection(playerForward); // Player's forward direction
+        playerForward.y = 0; // Ignore Y for 2D angle check
+        playerForward.normalize();
+        this.game.enemies.forEach(enemy => {
+            if (enemy.isAlive && enemy.mesh) {
+                const enemyPosition = enemy.mesh.position;
+                const distanceToEnemy = playerPosition.distanceTo(enemyPosition);
+                if (distanceToEnemy <= this.attackRange) {
+                    const directionToEnemy = new THREE.Vector3().subVectors(enemyPosition, playerPosition);
+                    directionToEnemy.y = 0; // Ignore Y for 2D angle check
+                    directionToEnemy.normalize();
+                    const angle = playerForward.angleTo(directionToEnemy);
+                    if (angle <= this.attackAngle / 2) { // Check if enemy is within the attack cone
+                        console.log(`Player hit ${enemy.constructor.name}! Dealing ${this.attackDamage} damage.`);
+                        enemy.takeDamage(this.attackDamage);
+                    }
+                }
+            }
+        });
+    }
+    _regenerateMana(deltaTime) {
+        if (!this.isAlive) return;
+        const now = this.mixer ? this.mixer.time : this.game.clock.getElapsedTime(); // Use mixer time if available
+        if ((now - this.lastManaUseTime) >= this.manaRegenCooldown) {
+            if (this.mana < this.maxMana) {
+                const prevMana = this.mana;
+                this.mana += this.manaRegenRate * deltaTime;
+                this.mana = Math.min(this.mana, this.maxMana); // Cap at maxMana
+                // Only update UI if mana actually changed (to avoid spamming updates)
+                if (this.mana !== prevMana && this.game && this.game.uiManager) {
+                    this.game.uiManager.updateMana(this.mana, this.maxMana);
+                }
+            }
+        }
     }
 }

@@ -13,14 +13,20 @@ export class UIManager {
         this.volumeValueLabel = null; // Reference to the volume value label
         this.sensitivitySlider = null; // For camera sensitivity
         this.sensitivityValueLabel = null; // For sensitivity value display
+        this.controlsHintElement = null; // For displaying game controls
+        this.pauseMenuElement = null; // Added for pause menu
+        this.gameOverScreenElement = null; // Added for game over screen
         // this.bloomToggle = null; // REMOVED
         // this.vignetteToggle = null; // REMOVED
         this._createStyles();
         this._createUIContainer();
         this._createMainMenu(); // Create menu first
         this._createSettingsPanel(); // Create settings panel
+        this._createPauseMenu(); // Create pause menu
+        this._createGameOverScreen(); // Create game over screen
         this._createBars();
         this._createHotbar();
+        this._createControlsHint(); // Create the controls hint
     }
     _createStyles() {
         const style = document.createElement('style');
@@ -139,7 +145,7 @@ export class UIManager {
                 left: 0;
                 width: 100%;
                 height: 100%;
-                background: rgba(10, 10, 20, 0.85); /* Dark mystical overlay */
+                background: transparent; /* Make menu background see-through */
                 display: flex;
                 flex-direction: column;
                 justify-content: center; /* Center content vertically */
@@ -164,7 +170,7 @@ export class UIManager {
                 color: #e0d6b3; /* Parchment-like color */
                 /* margin-bottom: 50px; Removed - Use gap on parent flex container instead */
                 text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.8); /* Darker shadow */
-                font-family: 'Garamond', serif; /* Using Garamond */
+                font-family: 'Arial', sans-serif; /* Changed to Arial */
                 font-weight: bold;
                 animation: fadeInTitle 1s ease-out forwards; /* Add fade-in animation */
                 width: 100%; /* Ensure it takes full width */
@@ -192,9 +198,9 @@ export class UIManager {
                  transition: background 0.2s ease-out, transform 0.15s ease-out, border-color 0.2s ease-out, box-shadow 0.2s ease-out;
                  text-align: center;
                  min-width: 180px; /* Enforce a consistent medium width */
-                 pointer-events: all; /* Buttons should be clickable */
-                 font-family: 'Garamond', serif; /* Consistent RPG font */
-                 text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
+                pointer-events: all; /* Buttons should be clickable */
+                font-family: 'Arial', sans-serif; /* Changed to Arial */
+                text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
                  opacity: 0; /* Start hidden for animation */
                  transform: scale(0.8); /* Start smaller for animation */
                  animation: popInButton 0.5s ease-out forwards; /* Pop-in animation */
@@ -240,7 +246,7 @@ export class UIManager {
                 transition: opacity 0.4s ease-out, visibility 0s linear 0.4s; /* Delay visibility change */
                 pointer-events: none;
                 visibility: hidden;
-                font-family: 'Garamond', serif;
+                font-family: 'Arial', sans-serif; /* Changed to Arial */
                 box-sizing: border-box;
                 padding: 20px;
             }
@@ -252,9 +258,9 @@ export class UIManager {
             }
              .settings-title {
                  font-size: 2.8em; /* Larger title */
-                 color: #e0d6b3; /* Parchment title */
-                 font-family: 'Garamond', serif;
-                 text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.8);
+                color: #e0d6b3; /* Parchment title */
+                font-family: 'Arial', sans-serif; /* Changed to Arial */
+                text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.8);
                  margin-bottom: 20px;
             }
             .settings-section {
@@ -356,10 +362,109 @@ export class UIManager {
                     text-align: right;
                 }
              }
+            .controls-hint {
+                position: absolute;
+                bottom: 15px;
+                right: 15px;
+                font-size: 0.85em;
+                color: rgba(220, 220, 220, 0.8);
+                text-shadow: 1px 1px 1px black;
+                z-index: 15; /* Above hotbar, below menu */
+                pointer-events: none;
+                display: none; /* Hidden by default, shown during gameplay */
+            }
+            @media (max-width: 600px) {
+                .controls-hint {
+                    font-size: 0.7em;
+                    bottom: 10px;
+                    right: 10px;
+                }
+            }
+            /* Pause Menu Styles */
+            .pause-menu {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.75); /* Darker overlay than settings */
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                gap: 25px;
+                z-index: 120; /* Above settings panel */
+                opacity: 0; /* Start hidden */
+                visibility: hidden;
+                pointer-events: none;
+                transition: opacity 0.3s ease-out, visibility 0s linear 0.3s;
+                font-family: 'Arial', sans-serif;
+            }
+            .pause-menu.visible {
+                opacity: 1;
+                visibility: visible;
+                pointer-events: all;
+                transition: opacity 0.3s ease-out;
+            }
+            .pause-menu-title {
+                font-size: 2.8em;
+                color: #d4c08c; /* Slightly less prominent than main menu title */
+                text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.7);
+                margin-bottom: 15px;
+            }
+            /* Pause menu buttons can reuse .menu-button styles or have their own */
+            .pause-menu .menu-button {
+                 animation: none; /* No pop-in for pause menu buttons for faster appearance */
+                 opacity: 1;
+                 transform: scale(1);
+            }
+            /* Game Over Screen Styles */
+            .game-over-screen {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(20, 0, 0, 0.85); /* Dark red, semi-transparent */
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                gap: 30px;
+                z-index: 130; /* Above pause menu */
+                opacity: 0;
+                visibility: hidden;
+                pointer-events: none;
+                transition: opacity 0.5s ease-out, visibility 0s linear 0.5s;
+                font-family: 'Arial', sans-serif; /* Consistent font */
+            }
+            .game-over-screen.visible {
+                opacity: 1;
+                visibility: visible;
+                pointer-events: all;
+                transition: opacity 0.5s ease-out;
+            }
+            .game-over-title {
+                font-size: 3.5em; /* Large and imposing */
+                color: #a02020; /* Dark, blood red */
+                text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.9);
+                margin-bottom: 10px;
+            }
+            /* Game Over buttons can reuse .menu-button styling or have specific ones */
+            .game-over-screen .menu-button {
+                animation: none; /* No animation for quicker appearance */
+                opacity: 1;
+                transform: scale(1);
+                background: linear-gradient(to bottom, rgba(100, 40, 40, 0.8), rgba(70, 20, 20, 0.9)); /* Darker red buttons */
+                border-color: #803030;
+            }
+            .game-over-screen .menu-button:hover {
+                background: linear-gradient(to bottom, rgba(120, 50, 50, 0.95), rgba(90, 30, 30, 1.0));
+                border-color: #a04040;
+            }
         `;
         document.head.appendChild(style);
     }
-
     _createUIContainer() {
         this.container = document.createElement('div');
         this.container.className = 'ui-container';
@@ -430,6 +535,43 @@ export class UIManager {
         backButton.classList.add('settings-back-button');
         this.settingsPanelElement.appendChild(backButton);
         this.container.appendChild(this.settingsPanelElement);
+    }
+    _createPauseMenu() {
+        this.pauseMenuElement = document.createElement('div');
+        this.pauseMenuElement.className = 'pause-menu'; // Starts hidden by CSS
+        const title = document.createElement('h2');
+        title.className = 'pause-menu-title';
+        title.textContent = 'Paused';
+        this.pauseMenuElement.appendChild(title);
+        const optionsContainer = document.createElement('div');
+        optionsContainer.className = 'menu-options'; // Re-use for layout
+        const resumeButton = this._createMenuButton('Resume', 'pause-resume');
+        const settingsButton = this._createMenuButton('Settings', 'pause-settings');
+        const exitToMenuButton = this._createMenuButton('Exit to Main Menu', 'pause-exit-menu');
+        optionsContainer.appendChild(resumeButton);
+        optionsContainer.appendChild(settingsButton);
+        optionsContainer.appendChild(exitToMenuButton);
+        this.pauseMenuElement.appendChild(optionsContainer);
+        this.container.appendChild(this.pauseMenuElement);
+    }
+    _createGameOverScreen() {
+        this.gameOverScreenElement = document.createElement('div');
+        this.gameOverScreenElement.className = 'game-over-screen'; // Starts hidden by CSS
+        const title = document.createElement('h1');
+        title.className = 'game-over-title';
+        title.textContent = 'Game Over';
+        this.gameOverScreenElement.appendChild(title);
+        const optionsContainer = document.createElement('div');
+        optionsContainer.className = 'menu-options'; // Re-use for layout
+        // In Game.js, you'll need to hook up this button's click event
+        // to call game.restartGame()
+        const restartButton = this._createMenuButton('Restart', 'gameover-restart');
+        // And this to game._enterMenuState() or similar
+        const exitToMenuButton = this._createMenuButton('Exit to Main Menu', 'gameover-exit-menu');
+        optionsContainer.appendChild(restartButton);
+        optionsContainer.appendChild(exitToMenuButton);
+        this.gameOverScreenElement.appendChild(optionsContainer);
+        this.container.appendChild(this.gameOverScreenElement);
     }
     _createSettingsSection(titleText) {
         const section = document.createElement('div');
@@ -536,6 +678,12 @@ export class UIManager {
 
         this.container.appendChild(this.hotbarContainer);
     }
+    _createControlsHint() {
+        this.controlsHintElement = document.createElement('div');
+        this.controlsHintElement.className = 'controls-hint';
+        this.controlsHintElement.textContent = 'WASD - Movement | ESC - Show Mouse / Pause';
+        this.container.appendChild(this.controlsHintElement);
+    }
     // --- Control Methods ---
     showMainMenu() {
         if (this.mainMenuElement) {
@@ -551,35 +699,49 @@ export class UIManager {
         if (this.settingsPanelElement) {
             this.settingsPanelElement.classList.add('visible');
         }
-         if (this.mainMenuElement) {
-             // Optional: Hide the main menu buttons container while settings are open
-             const optionsContainer = this.mainMenuElement.querySelector('.menu-options');
-             if (optionsContainer) optionsContainer.style.display = 'none';
-             const title = this.mainMenuElement.querySelector('.menu-title');
-             if(title) title.style.display = 'none'; // Hide title too
-         }
+        // Removed direct manipulation of main menu elements.
+        // Game.js will now handle showing/hiding main menu elements
+        // when settings are displayed from the main menu context.
     }
     hideSettingsPanel() {
         if (this.settingsPanelElement) {
-             this.settingsPanelElement.classList.remove('visible');
+            this.settingsPanelElement.classList.remove('visible');
         }
-         if (this.mainMenuElement) {
-             // Show main menu buttons again
-             const optionsContainer = this.mainMenuElement.querySelector('.menu-options');
-             if (optionsContainer) optionsContainer.style.display = 'flex'; // Assuming it's flex
-             const title = this.mainMenuElement.querySelector('.menu-title');
-             if(title) title.style.display = 'block'; // Show title again
-         }
+        // Removed direct manipulation of main menu elements.
+        // Game.js will now handle showing/hiding main menu elements
+        // when settings are closed and returning to the main menu context.
     }
     showGameUI() {
         // Show health/mana bars and hotbar (assuming they exist and refs are stored)
         if (this.statusBarContainer) this.statusBarContainer.style.display = 'block';
         if (this.hotbarContainer) this.hotbarContainer.style.display = 'flex';
+        if (this.controlsHintElement) this.controlsHintElement.style.display = 'block'; // Show controls hint
     }
     hideGameUI() {
-       // Hide health/mana bars and hotbar
+       // Hide health/mana bars, hotbar, and controls hint
         if (this.statusBarContainer) this.statusBarContainer.style.display = 'none';
         if (this.hotbarContainer) this.hotbarContainer.style.display = 'none';
+        if (this.controlsHintElement) this.controlsHintElement.style.display = 'none'; // Hide controls hint
+    }
+    showPauseMenu() {
+        if (this.pauseMenuElement) {
+            this.pauseMenuElement.classList.add('visible');
+        }
+    }
+    hidePauseMenu() {
+        if (this.pauseMenuElement) {
+            this.pauseMenuElement.classList.remove('visible');
+        }
+    }
+    showGameOverScreen() {
+        if (this.gameOverScreenElement) {
+            this.gameOverScreenElement.classList.add('visible');
+        }
+    }
+    hideGameOverScreen() {
+        if (this.gameOverScreenElement) {
+            this.gameOverScreenElement.classList.remove('visible');
+        }
     }
      // --- Getters for Control Elements ---
     getVolumeSlider() {

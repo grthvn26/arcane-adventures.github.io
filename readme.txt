@@ -9,17 +9,20 @@ Current Features
 - Sky 
 - Basic UI
 - Knight Asset
+- Attack Feature
+- Updated 
 
 New Features
 - Trees
 - Volume Control
 - Camera Sensitivity 
+- Updated attack animations
 
 Work-in-Progress 
 - Assets
+- Walk animation
 - Health and Mana Bar
 - Skill Hotbar
-- Attack and Defend Mechanics
 
 Future: 
 - Class System
