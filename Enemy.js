@@ -1,14 +1,15 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-
+import { AudioLoader, Audio } from 'three'; // Added Audio and AudioLoader
 const ENEMY_MODEL_URL = 'https://play.rosebud.ai/assets/Skeleton_Warrior.glb?ymv2';
+const ENEMY_ATTACK_SOUND_URL = 'https://play.rosebud.ai/assets/03_Claw_03.wav?UIzl';
 const ENEMY_SCALE = 1.0; // Adjust as needed
-const ENEMY_INITIAL_POSITION = new THREE.Vector3(5, 0, 0); // Example starting position
-
 export class Enemy {
-    constructor(scene, player) {
+    constructor(scene, player, initialPosition = new THREE.Vector3(0, 0, 0), audioListener) {
         this.scene = scene;
         this.player = player; // Reference to the player for AI later
+        this.initialPosition = initialPosition; // Store the initial position
+        this.audioListener = audioListener; // Store the audio listener
         this.mesh = null;
         this.mixer = null;
         this.animations = {};
@@ -26,22 +27,52 @@ export class Enemy {
         this.targetPosition = new THREE.Vector3(); // For AI movement
         this.velocity = new THREE.Vector3();
         this.onGround = false;
-        this.attackDamage = 10; // Damage dealt by enemy
+        this.attackDamage = 5; // Damage dealt by enemy - Updated to 5
         this.attackCooldown = 2.0; // Seconds between attacks
         this.lastAttackTime = -Infinity; // Time of last attack
         this.isAttacking = false; // Is enemy currently in an attack animation
         this.attackWindUpTime = 0.5; // Time from attack anim start to damage dealt (sync with animation)
         this.radius = 0.5; // Approximate radius for collision
+        this.attackSoundBuffer = null;
+        this.attackSound = null;
+        this.deathRemovalTimer = null; // Timer for delayed removal
+        this.deathLingerDuration = 1.5; // Seconds to linger after death animation
         this._loadModel();
+        this._loadSounds();
     }
-
+    static _smokeTexture = null; // Cache the texture
+    static getSmokeParticleTexture() {
+        if (!Enemy._smokeTexture) {
+            const canvas = document.createElement('canvas');
+            const size = 128;
+            canvas.width = size;
+            canvas.height = size;
+            const context = canvas.getContext('2d');
+            const gradient = context.createRadialGradient(
+                size / 2, size / 2, 0,
+                size / 2, size / 2, size / 2
+            );
+            gradient.addColorStop(0, 'rgba(200, 200, 200, 0.7)'); // Center of smoke
+            gradient.addColorStop(0.6, 'rgba(150, 150, 150, 0.4)');
+            gradient.addColorStop(1, 'rgba(100, 100, 100, 0)');    // Outer edge (transparent)
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, size, size);
+            Enemy._smokeTexture = new THREE.CanvasTexture(canvas);
+            Enemy._smokeTexture.needsUpdate = true;
+        }
+        return Enemy._smokeTexture;
+    }
+    
+    static playSpawnEffect(scene, position, effectUpdaters) {
+        const effect = new SpawnSmokeEffect(scene, position);
+        effectUpdaters.push(effect);
+    }
     _loadModel() {
         const loader = new GLTFLoader();
         loader.load(ENEMY_MODEL_URL, (gltf) => {
             this.mesh = gltf.scene;
             this.mesh.scale.set(ENEMY_SCALE, ENEMY_SCALE, ENEMY_SCALE);
-            this.mesh.position.copy(ENEMY_INITIAL_POSITION);
-
+            this.mesh.position.copy(this.initialPosition); // Use the passed initial position
             this.mesh.traverse((child) => {
                 if (child.isMesh) {
                     child.castShadow = true;
@@ -64,11 +95,32 @@ export class Enemy {
             this.mixer = new THREE.AnimationMixer(this.mesh);
             const clips = gltf.animations;
             console.log("Skeleton Warrior available animations:", clips.map(clip => clip.name));
-
-            // Example: Load common animations (adjust names based on GLB content)
-            const idleClip = THREE.AnimationClip.findByName(clips, 'Idle'); // Or 'Armature|Idle' etc.
-            const walkClip = THREE.AnimationClip.findByName(clips, 'Walk'); // Or 'Armature|Walk'
-            const attackClip = THREE.AnimationClip.findByName(clips, '1H_Melee_Attack_Chop'); // Updated attack animation name
+            const idleClip = THREE.AnimationClip.findByName(clips, 'Idle');
+            const attackClip = THREE.AnimationClip.findByName(clips, '1H_Melee_Attack_Chop');
+            // Enhanced search for death animation
+            const deathAnimNames = ['Death_A', 'Death_B', 'Death_C_Skeleton', 'Death_C_Skeletons', 'Death_A_Pose', 'Death_B_Pose', 'Death_C_Pose'];
+            let deathClip = null; // This will be populated by the loop if an animation is found
+            let foundDeathAnimName = '';
+            for (const animName of deathAnimNames) {
+                const clip = THREE.AnimationClip.findByName(clips, animName);
+                if (clip) {
+                    deathClip = clip; // Assign to the deathClip variable to be used later
+                    foundDeathAnimName = animName;
+                    console.log(`Skeleton: Found potential death animation: ${animName}`);
+                    break; // Found a suitable animation, stop searching
+                }
+            }
+            // --- Walk Animations for Enemy ---
+            this.animations['walking_a'] = THREE.AnimationClip.findByName(clips, 'Walking_A');
+            this.animations['walking_b'] = THREE.AnimationClip.findByName(clips, 'Walking_B');
+            this.animations['walking_backwards'] = THREE.AnimationClip.findByName(clips, 'Walking_Backwards');
+            this.animations['walking_c'] = THREE.AnimationClip.findByName(clips, 'Walking_C');
+            
+            let primaryWalkClip = this.animations['walking_a'] || 
+                                  this.animations['walking_b'] || 
+                                  this.animations['walking_c'] ||
+                                  THREE.AnimationClip.findByName(clips, 'Walk') || // Fallback to generic Walk
+                                  THREE.AnimationClip.findByName(clips, 'walk');   // Fallback to generic walk
             if (idleClip) {
                 this.animations['idle'] = this.mixer.clipAction(idleClip);
                 this.animations['idle'].play();
@@ -77,28 +129,64 @@ export class Enemy {
             } else {
                 console.warn("Skeleton Idle animation not found.");
             }
-            if (walkClip) {
-                this.animations['walk'] = this.mixer.clipAction(walkClip);
-                console.log("Skeleton Walk animation loaded.");
+            if (primaryWalkClip) {
+                this.animations['walk'] = this.mixer.clipAction(primaryWalkClip);
+                this.animations['walk'].setLoop(THREE.LoopRepeat);
+                console.log(`Skeleton primary walk animation loaded as 'walk': ${primaryWalkClip.name}`);
             } else {
-                console.warn("Skeleton Walk animation not found.");
+                console.warn("Skeleton: No suitable primary walk animation found.");
             }
+            ['walking_a', 'walking_b', 'walking_backwards', 'walking_c'].forEach(name => {
+                if (this.animations[name] && this.animations[name] !== primaryWalkClip) {
+                    if (this.animations[name] instanceof THREE.AnimationClip) {
+                        this.animations[name] = this.mixer.clipAction(this.animations[name]);
+                        this.animations[name].setLoop(THREE.LoopRepeat);
+                        console.log(`Skeleton ${name} animation loaded.`);
+                    }
+                } else if (this.animations[name] === primaryWalkClip && name !== 'walk' && this.animations['walk']) {
+                     this.animations[name] = this.animations['walk']; 
+                }
+            });
             if (attackClip) {
                 this.animations['attack'] = this.mixer.clipAction(attackClip);
                 this.animations['attack'].setLoop(THREE.LoopOnce);
-                this.animations['attack'].clampWhenFinished = false; // Don't clamp, let it transition
+                this.animations['attack'].clampWhenFinished = false; 
                 console.log("Skeleton Attack animation loaded.");
-                // Listen for attack animation finish
-                this.mixer.addEventListener('finished', (e) => {
-                    if (e.action === this.animations['attack']) {
-                        this.isAttacking = false;
-                        // No explicit transition here; update loop will handle it
-                        // by re-evaluating player distance and choosing walk or idle.
-                    }
-                });
             } else {
                 console.warn("Skeleton Attack animation not found.");
             }
+            if (deathClip) { // deathClip is now populated by the loop above
+                this.animations['death'] = this.mixer.clipAction(deathClip);
+                this.animations['death'].setLoop(THREE.LoopOnce);
+                this.animations['death'].clampWhenFinished = true; // Keep last frame of death
+                console.log(`Skeleton: '${foundDeathAnimName}' animation loaded as 'death'.`); // Use foundDeathAnimName
+            } else {
+                console.warn("Skeleton: No suitable death animation found from the provided list. Searched for: ['Death_A', 'Death_B', 'Death_C_Skeleton', 'Death_C_Skeletons', 'Death_A_Pose', 'Death_B_Pose', 'Death_C_Pose']");
+            }
+            // Listen for animation finishes
+            this.mixer.addEventListener('finished', (e) => {
+                if (e.action === this.animations['attack']) {
+                    this.isAttacking = false;
+                } else if (e.action === this.animations['death']) {
+                    // After death animation finishes, make non-interactive or remove
+                    // For now, we'll just ensure it stays dead and might fade out later or be removed by a manager
+                    console.log("Skeleton death animation finished. Starting linger timer.");
+                    // Optionally, make the mesh invisible or start a fade-out effect here
+                    // this.scene.remove(this.mesh); // Or remove after a delay
+                    if (this.mesh) { // Check if mesh exists before scheduling removal
+                        this.deathRemovalTimer = setTimeout(() => {
+                            if (this.mesh && this.scene) { // Check again in case scene or mesh changed
+                                console.log("Removing skeleton mesh after linger.");
+                                this.scene.remove(this.mesh);
+                                // Consider disposing geometry/material here if truly done with this instance
+                                // e.g., if (this.mesh.geometry) this.mesh.geometry.dispose();
+                                // if (this.mesh.material) this.mesh.material.dispose(); // careful with shared materials
+                                this.mesh = null; // Nullify reference
+                            }
+                        }, this.deathLingerDuration * 1000);
+                    }
+                }
+            });
              // Attempt to set initial ground position after model loads
             if (this.scene.environment) { // Assuming environment is accessible via scene
                 const groundY = this.scene.environment.getGroundHeight(this.mesh.position.x, this.mesh.position.z);
@@ -113,14 +201,25 @@ export class Enemy {
             const fallbackGeometry = new THREE.BoxGeometry(0.8, 1.8, 0.8);
             const fallbackMaterial = new THREE.MeshStandardMaterial({ color: 0x880000 });
             this.mesh = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
-            this.mesh.position.copy(ENEMY_INITIAL_POSITION);
+            this.mesh.position.copy(this.initialPosition); // Use passed initial position for fallback too
             this.mesh.castShadow = true;
             this.scene.add(this.mesh);
         });
     }
 
     update(deltaTime, environment) {
-        if (!this.mesh || !this.isAlive || !this.mixer) return; // Added mixer check
+        if (!this.isAlive || !this.mixer) { // Mesh check is implicitly handled by isAlive and death flow
+             // If not alive, and mesh still exists, only mixer updates might be relevant (for death anim)
+             // But if deathRemovalTimer is set, it means death animation is done and it's just lingering.
+            if (this.isAlive && !this.mesh) return; // If alive but no mesh, something is wrong.
+            if (!this.isAlive && this.deathRemovalTimer && !this.mesh) return; // Dead, lingering, but mesh already removed.
+            // If not alive and death anim is playing, mixer still needs update.
+        }
+        if (this.mixer) { // Always update mixer if it exists
+            this.mixer.update(deltaTime);
+        }
+        if (!this.isAlive) return; // No AI or movement updates if dead. Mixer update above handles death anim.
+        if (!this.mesh) return; // If mesh got removed (e.g. by death linger), no further updates.
         // Handle damage flash
         if (this.damageFlashTimer > 0) {
             this.damageFlashTimer -= deltaTime;
@@ -128,7 +227,7 @@ export class Enemy {
                 this._revertMaterial();
             }
         }
-        this.mixer.update(deltaTime); // Moved mixer update to happen before AI logic for current frame
+        // this.mixer.update(deltaTime); // Mixer update moved to top of function
         let isMoving = false;
         let targetAnimation = 'idle'; // Default animation
         if (this.isAttacking) {
@@ -188,6 +287,25 @@ export class Enemy {
             this.mesh.position.x += this.velocity.x * deltaTime;
             this.mesh.position.z += this.velocity.z * deltaTime;
         }
+        // World Border Check
+        if (environment && environment.ground) {
+            const groundSize = environment.ground.geometry.parameters.width; // From environment.js
+            const halfGroundSize = groundSize / 2;
+            if (this.mesh.position.x > halfGroundSize) {
+                this.mesh.position.x = halfGroundSize;
+                this.velocity.x = 0; 
+            } else if (this.mesh.position.x < -halfGroundSize) {
+                this.mesh.position.x = -halfGroundSize;
+                this.velocity.x = 0;
+            }
+            if (this.mesh.position.z > halfGroundSize) {
+                this.mesh.position.z = halfGroundSize;
+                this.velocity.z = 0;
+            } else if (this.mesh.position.z < -halfGroundSize) {
+                this.mesh.position.z = -halfGroundSize;
+                this.velocity.z = 0;
+            }
+        }
         // Apply gravity
 // Corrected previous GRAVITY constant name (was missing from provided snippet)
 // Assuming GRAVITY is defined elsewhere, e.g., const GRAVITY = -18.0;
@@ -246,19 +364,51 @@ export class Enemy {
     die() {
         if (!this.isAlive) return;
         this.isAlive = false;
-        console.log("Enemy has died.");
-        // Placeholder: Play death animation, then remove from scene or make non-interactive
-        if (this.animations['death']) { // Assuming a 'death' animation exists
-            this.playAnimation('death', 0.2, THREE.LoopOnce);
-            // Remove after animation finishes
-            // this.mixer.addEventListener('finished', (e) => {
-            // if (e.action === this.animations['death']) {
-            // this.scene.remove(this.mesh);
-            // }
-            // });
-        } else {
-            this.scene.remove(this.mesh); // If no death animation, remove immediately
+        console.log("Enemy has died. Attempting to play death animation.");
+        // Ensure material is reverted from any damage flash
+        if (this.damageFlashTimer > 0) {
+            this._revertMaterial();
+            this.damageFlashTimer = 0; // Stop the flash timer logic in update
         }
+        if (this.animations['death'] && this.mixer) {
+            const deathAction = this.animations['death'];
+            const currentClipName = this.currentAction ? this.currentAction.getClip().name : "None";
+            console.log(`Current action before death: ${currentClipName}. Transitioning to death anim: ${deathAction.getClip().name}`);
+            // Explicitly stop the current animation and play 'death' directly
+            if (this.currentAction && this.currentAction !== deathAction) {
+                this.currentAction.stop();
+            }
+            
+            deathAction.reset(); // Ensure it plays from the start
+            deathAction.setLoop(THREE.LoopOnce); // Should already be set, but re-affirm
+            deathAction.clampWhenFinished = true; // Should already be set, but re-affirm
+            deathAction.play();
+            this.currentAction = deathAction; // Manually update currentAction
+            console.log(`Playing '${deathAction.getClip().name}' for death. Is running: ${deathAction.isRunning()}. Mixer time: ${this.mixer.time.toFixed(2)}`);
+            // The 'finished' listener in _loadModel should handle removal after animation.
+        } else {
+            console.log("No death animation found or mixer not available. Removing enemy mesh immediately.");
+            if (this.mesh && this.scene) {
+                this.scene.remove(this.mesh);
+                this.mesh = null; // Nullify reference
+            }
+        }
+    }
+    _loadSounds() {
+        if (!this.audioListener) {
+            console.warn("Enemy: AudioListener not provided, cannot load sounds.");
+            return;
+        }
+        const loader = new AudioLoader();
+        loader.load(ENEMY_ATTACK_SOUND_URL, (buffer) => {
+            this.attackSoundBuffer = buffer;
+            this.attackSound = new Audio(this.audioListener);
+            this.attackSound.setBuffer(this.attackSoundBuffer);
+            this.attackSound.setVolume(0.4); // Adjust volume as needed (0.0 to 1.0)
+            console.log("Enemy attack sound loaded.");
+        }, undefined, (error) => {
+            console.error("Error loading enemy attack sound:", error);
+        });
     }
     _performAttack(currentTime) {
         if (!this.isAlive || this.isAttacking || !this.animations['attack']) return;
@@ -266,6 +416,9 @@ export class Enemy {
         this.isAttacking = true;
         this.lastAttackTime = currentTime;
         this.playAnimation('attack', 0.1, THREE.LoopOnce, false); // Fast transition to attack
+        if (this.attackSound && !this.attackSound.isPlaying) {
+            this.attackSound.play();
+        }
         // Deal damage after a delay (wind-up)
         setTimeout(() => {
             if (!this.isAlive || !this.player || !this.player.isAlive || !this.player.mesh || !this.mesh) {
@@ -305,11 +458,21 @@ playAnimation(name, crossFadeDuration = 0.3, loop = THREE.LoopRepeat, clampWhenF
         // Attempt common fallbacks if direct name not found
         if (name.toLowerCase() === 'idle' && this.animations['Idle']) {
             targetAction = this.animations['Idle'];
-        } else if (name.toLowerCase() === 'walk' && this.animations['Walk']) {
-            targetAction = this.animations['Walk'];
+        } else if (name.toLowerCase() === 'walk') { // General 'walk' request
+            // Prefer 'Walking_A', then 'walk' (which holds the primary loaded walk/run)
+            targetAction = this.animations['walking_a'] || this.animations['walk'] || this.animations['Walking_B'] || this.animations['Walking_C'];
+        } else if (name.toLowerCase() === 'walking_a' && this.animations['walking_a']) {
+            targetAction = this.animations['walking_a'];
+        } else if (name.toLowerCase() === 'walking_b' && this.animations['walking_b']) {
+            targetAction = this.animations['walking_b'];
+        } else if (name.toLowerCase() === 'walking_backwards' && this.animations['walking_backwards']) {
+            targetAction = this.animations['walking_backwards'];
+        } else if (name.toLowerCase() === 'walking_c' && this.animations['walking_c']) {
+            targetAction = this.animations['walking_c'];
         } else if (name.toLowerCase() === 'attack' && this.animations['1H_Melee_Attack_Chop']) {
              targetAction = this.animations['1H_Melee_Attack_Chop'];
         }
+        
         if (!targetAction) {
             // console.warn(`Enemy animation "${name}" not found.`); // Can be noisy
             return;
@@ -410,6 +573,83 @@ playAnimation(name, crossFadeDuration = 0.3, loop = THREE.LoopRepeat, clampWhenF
             if (movingTowardsPlayer) {
                 this.velocity.multiplyScalar(0.8); // Dampen velocity
             }
+        }
+    }
+}
+// Removed the extra closing brace that was here causing the syntax error
+class SpawnSmokeEffect {
+    constructor(scene, position) {
+        this.scene = scene;
+        this.position = position.clone();
+        this.particles = [];
+        this.isFinished = false;
+        this.effectGroup = new THREE.Group();
+        this.scene.add(this.effectGroup);
+        const numParticles = 10 + Math.floor(Math.random() * 5); // 10 to 14 particles
+        const texture = Enemy.getSmokeParticleTexture();
+        for (let i = 0; i < numParticles; i++) {
+            const material = new THREE.SpriteMaterial({
+                map: texture,
+                color: 0xaaaaaa, // Greyish smoke
+                transparent: true,
+                opacity: 0.6 + Math.random() * 0.2, // Initial opacity
+                blending: THREE.NormalBlending, 
+                depthWrite: false 
+            });
+            const sprite = new THREE.Sprite(material);
+            const initialScale = 0.4 + Math.random() * 0.7;
+            sprite.scale.set(initialScale, initialScale, initialScale);
+            
+            // Spawn particles slightly above the given position (ground level)
+            sprite.position.copy(this.position);
+            sprite.position.y += 0.2; // Start slightly above ground
+            sprite.position.x += (Math.random() - 0.5) * 0.3;
+            sprite.position.z += (Math.random() - 0.5) * 0.3;
+            const particleData = {
+                sprite: sprite,
+                velocity: new THREE.Vector3(
+                    (Math.random() - 0.5) * 1.2, 
+                    0.6 + Math.random() * 1.0,   
+                    (Math.random() - 0.5) * 1.2  
+                ),
+                life: 0.9 + Math.random() * 0.8, 
+                initialLife: 0,
+                rotationSpeed: (Math.random() - 0.5) * 1.5,
+                scaleFactor: 1.2 + Math.random() * 0.8 
+            };
+            particleData.initialLife = particleData.life;
+            this.particles.push(particleData);
+            this.effectGroup.add(sprite);
+        }
+    }
+    update(deltaTime) {
+        if (this.isFinished) return;
+        let allParticlesDead = true;
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.life -= deltaTime;
+            if (p.life <= 0) {
+                this.effectGroup.remove(p.sprite);
+                p.sprite.material.dispose();
+                this.particles.splice(i, 1);
+                continue;
+            }
+            allParticlesDead = false;
+            p.sprite.position.addScaledVector(p.velocity, deltaTime);
+            p.velocity.y -= 2.0 * deltaTime; // Gravity on smoke
+            const lifeRatio = p.life / p.initialLife;
+            p.sprite.material.opacity = Math.max(0, lifeRatio * (0.6 + Math.random()*0.1)); // Fade out
+            
+            const currentScale = p.sprite.scale.x;
+            const scaleIncrease = p.scaleFactor * deltaTime * (0.5 + lifeRatio * 0.5); // Grow more when new
+            p.sprite.scale.set(currentScale + scaleIncrease, currentScale + scaleIncrease, currentScale + scaleIncrease);
+            
+            p.sprite.material.rotation += p.rotationSpeed * deltaTime;
+        }
+        if (allParticlesDead && this.particles.length === 0) {
+            this.isFinished = true;
+            this.scene.remove(this.effectGroup);
+            // console.log("Smoke effect finished and removed.");
         }
     }
 }

@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js'; // Import ColladaLoader
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'; // Import GLTFLoader
-const GROUND_SIZE = 50;
-const NUM_TREES = 45; // Increased tree count slightly
+const GROUND_SIZE = 100; // Increased world size
+const NUM_TREES = 90; // Increased tree count to match larger world
 const TREE_MODEL_URLS = [
     'https://play.rosebud.ai/assets/Tree Type0 01.dae?mTNB',
     'https://play.rosebud.ai/assets/Tree Type0 02.dae?62We',
@@ -10,7 +10,7 @@ const TREE_MODEL_URLS = [
 ];
 const TREE_TEXTURE_URL = 'https://play.rosebud.ai/assets/Colorsheet Tree Normal.png?WZsm';
 const GRASS_MODEL_URL = 'https://play.rosebud.ai/assets/Grass_1_A_Color1.gltf?fFPX'; // Added grass model URL
-const NUM_GRASS_PATCHES = 150; // How many grass patches to scatter
+const NUM_GRASS_PATCHES = 300; // Increased grass patches for larger world
 export class Environment {
     constructor(scene) {
         this.scene = scene;
@@ -54,7 +54,7 @@ export class Environment {
             texture.colorSpace = THREE.SRGBColorSpace; // Ensure correct color space
             texture.flipY = false; // DAE models might need this
             this.treeTexture = texture;
-            console.log("Tree texture loaded successfully.");
+            // console.log("Tree texture loaded successfully."); // Removed for cleaner console
             onLoadCallback();
         }, undefined, (error) => {
             console.error('Error loading tree texture:', error);
@@ -96,7 +96,7 @@ export class Environment {
                 // This offset ensures the lowest point of the rotated model sits on the ground.
                 const baseOffsetY = Math.abs(box.min.y); 
                 this.treeBaseOffsets[url] = baseOffsetY;
-                console.log(`Tree model ${index + 1} loaded from ${url}, Corrective Rot: X=-PI/2, Base offset: ${baseOffsetY.toFixed(2)}`);
+                // console.log(`Tree model ${index + 1} loaded from ${url}, Base offset: ${baseOffsetY.toFixed(2)}`); // Cleaned up log
                 this.treeModels[index] = loadedModel; // Store the wrapper group
                 modelsToLoad--;
                 if (modelsToLoad === 0) {
@@ -129,7 +129,7 @@ export class Environment {
                     }
                 }
             });
-            console.log("Grass model loaded successfully.");
+            // console.log("Grass model loaded successfully."); // Removed for cleaner console
             onLoadCallback();
         }, undefined, (error) => {
             console.error('Error loading grass model:', error);
@@ -139,7 +139,7 @@ export class Environment {
      _tryScatterAssets() {
         // Only scatter when *both* trees and grass are loaded
         if (this.modelsLoaded.trees && this.modelsLoaded.grass) {
-            console.log("All assets loaded, scattering trees and grass.");
+            // console.log("All assets loaded, scattering trees and grass."); // Removed for cleaner console
             this._scatterTrees();
             this._scatterGrass();
             this.scene.add(this.trees);

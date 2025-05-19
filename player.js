@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'; // Added
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { Inventory } from 'Inventory'; // Import the Inventory class
 // Adjusted constants for Knight model (approximate)
 const PLAYER_HEIGHT = 1.8; // Keep for camera target offset logic
 const PLAYER_RADIUS = 0.4; // Keep for simple collision logic for now
@@ -26,9 +27,10 @@ export class Player {
         this.attackManaCost = 10; // Mana cost per attack
         this.attackDamage = 15; // Amount of damage player's attack deals
         this.attackRange = 1.8; // How close player needs to be to hit (adjust to match animation)
-        this.attackAngle = Math.PI / 2.5; // Cone of attack in front of player (90 degrees total, 45 each side)
-        this.mesh = null; // Initialize mesh as null, will be loaded async
-        this.velocity = new THREE.Vector3(0, 0, 0);
+this.attackAngle = Math.PI / 2.5; // Cone of attack in front of player (90 degrees total, 45 each side)
+this.defenseDamageReduction = 0.5; // 50% damage reduction while defending
+this.mesh = null; // Initialize mesh as null, will be loaded async
+this.velocity = new THREE.Vector3(0, 0, 0);
         this.onGround = false;
         this.moveDirection = new THREE.Vector3();
         this.targetCameraPosition = new THREE.Vector3();
@@ -48,9 +50,10 @@ export class Player {
         this.isDefending = false; // Track defense state
         this.attackCooldown = 0.8; // Seconds between attacks
         this.lastAttackTime = -Infinity; // Time of the last attack start
-        this.isAlive = true; // Player starts alive
-        this._loadModel();
-        this._updateCameraRotation(0, 0); // Initial rotation setup
+this.isAlive = true; // Player starts alive
+this.inventory = new Inventory(12); // Player has a 12-slot inventory
+this._loadModel();
+this._updateCameraRotation(0, 0); // Initial rotation setup
     }
     _loadModel() {
         const loader = new GLTFLoader();
@@ -90,18 +93,66 @@ export class Player {
                  idleClip = clips[0]; // Use the first animation in the list as a fallback
              }
             // --- Find WALK/MOVE Animation ---
-            let primaryMoveClip = THREE.AnimationClip.findByName(clips, 'Walking_B');
-            if (!primaryMoveClip) primaryMoveClip = THREE.AnimationClip.findByName(clips, 'Walk');
-            if (!primaryMoveClip) primaryMoveClip = THREE.AnimationClip.findByName(clips, 'walk');
-            if (!primaryMoveClip) {
-                console.warn("Standard walk animations ('Walking_B', 'Walk', 'walk') not found. Trying running animations for primary movement...");
-                primaryMoveClip = THREE.AnimationClip.findByName(clips, 'Running_A');
+            // Prioritize specific walking animations
+            this.animations['walking_a'] = THREE.AnimationClip.findByName(clips, 'Walking_A');
+            this.animations['walking_b'] = THREE.AnimationClip.findByName(clips, 'Walking_B');
+            this.animations['walking_backwards'] = THREE.AnimationClip.findByName(clips, 'Walking_Backwards');
+            this.animations['walking_c'] = THREE.AnimationClip.findByName(clips, 'Walking_C');
+            // Fallback to generic walk if specifics aren't found
+            if (!this.animations['walking_a'] && !this.animations['walking_b'] && !this.animations['walking_c']) {
+                let genericWalkClip = THREE.AnimationClip.findByName(clips, 'Walk') || THREE.AnimationClip.findByName(clips, 'walk');
+                if (genericWalkClip) {
+                    this.animations['walking_a'] = genericWalkClip; // Use 'walking_a' as the primary generic walk slot
+                    console.warn("Specific walk animations (A, B, C) not found. Using generic 'Walk'/'walk' for 'walking_a'.");
+                }
             }
-            if (!primaryMoveClip) primaryMoveClip = THREE.AnimationClip.findByName(clips, 'Run');
-            if (!primaryMoveClip) primaryMoveClip = THREE.AnimationClip.findByName(clips, 'run');
+            
+            // --- Find RUN Animation ---
+            this.animations['running_a'] = THREE.AnimationClip.findByName(clips, 'Running_A');
+            this.animations['running_b'] = THREE.AnimationClip.findByName(clips, 'Running_B');
+            // Determine primaryMoveClip: Prefer Walking_A, then B, then C, then generic Walk, then Running_A
+            // --- DIAGNOSTIC: Force Running_A as primary move clip ---
+            let primaryMoveClip = this.animations['running_a'];
+            let forcedDiagnosticAnim = false;
+            if (primaryMoveClip) {
+                console.warn("DIAGNOSTIC: Attempting to force 'Running_A' as primary movement animation.");
+                forcedDiagnosticAnim = true;
+            } else {
+                // Fallback to original logic if Running_A is not found
+                console.warn("DIAGNOSTIC: 'Running_A' not found for diagnostic. Reverting to original primaryMoveClip logic.");
+                primaryMoveClip = this.animations['walking_a'] || this.animations['walking_b'] || this.animations['walking_c'];
+                if (!primaryMoveClip) {
+                    primaryMoveClip = this.animations['running_a'] || this.animations['running_b']; // This will also be null if the above check failed for running_a
+                    if (primaryMoveClip) {
+                        console.warn("No walk animations found. Using a running animation as primary movement.");
+                    } else {
+                        // Final fallback to any 'Run' or 'run' clip if even specific running anims are missing
+                        let genericRunClip = THREE.AnimationClip.findByName(clips, 'Run') || THREE.AnimationClip.findByName(clips, 'run');
+                        primaryMoveClip = genericRunClip;
+                        if (primaryMoveClip) {
+                           console.warn("No specific walk or run animations found. Using generic 'Run'/'run' as primary movement.");
+                        }
+                    }
+                }
+            }
+            if(forcedDiagnosticAnim && !primaryMoveClip) {
+                // This case should ideally not be hit if Running_A was expected but somehow became null after assignment.
+                // For safety, ensure primaryMoveClip doesn't proceed as null if diagnostic assignment failed unexpectedly.
+                // Re-run original logic as a comprehensive fallback.
+                console.warn("DIAGNOSTIC: 'Running_A' was initially found but became null. Re-evaluating primaryMoveClip with full logic.");
+                 primaryMoveClip = this.animations['walking_a'] || this.animations['walking_b'] || this.animations['walking_c'] ||
+                                  this.animations['running_a'] || this.animations['running_b'] ||
+                                  THREE.AnimationClip.findByName(clips, 'Run') || THREE.AnimationClip.findByName(clips, 'run');
+            }
+            // --- End DIAGNOSTIC ---
+            // The existing console.log for "Player: Determined primaryMoveClip to be:" will show what was ultimately selected.
             // --- End Find WALK/MOVE ---
-            const jumpClip = THREE.AnimationClip.findByName(clips, 'Jump');
-            const attackClip = THREE.AnimationClip.findByName(clips, '1H_Melee_Attack_Slice_Diagonal'); // Changed to user requested attack
+            // --- Find JUMP Animations ---
+            this.animations['jump_full_long'] = THREE.AnimationClip.findByName(clips, 'Jump_Full_Long');
+            this.animations['jump_full_short'] = THREE.AnimationClip.findByName(clips, 'Jump_Full_Short');
+            this.animations['jump_idle'] = THREE.AnimationClip.findByName(clips, 'Jump_Idle');
+            const jumpClip = this.animations['jump_idle'] || THREE.AnimationClip.findByName(clips, 'Jump'); // Prioritize Jump_Idle
+            const attackClip = THREE.AnimationClip.findByName(clips, '1H_Melee_Attack_Slice_Diagonal');
             const attackChopClip = THREE.AnimationClip.findByName(clips, '1H_Melee_Attack_Chop');
             // Note: The separate 'runClip' loading is removed; its candidates are now part of primaryMoveClip search.
             if (idleClip) {
@@ -113,23 +164,62 @@ export class Player {
              } else {
                 console.error("CRITICAL: No suitable idle animation found for the player model. Player may remain in T-pose.");
              }
-            // Load PRIMARY MOVE animation into 'walk' action
+            // Load PRIMARY MOVE animation into 'walk' action (still using 'walk' as the key for the primary one)
             if (primaryMoveClip) {
-               this.animations['walk'] = this.mixer.clipAction(primaryMoveClip);
-               this.animations['walk'].setLoop(THREE.LoopRepeat); // Ensure movement animations loop
+               this.animations['walk'] = this.mixer.clipAction(primaryMoveClip); // This will be the default walk/run
+               this.animations['walk'].setLoop(THREE.LoopRepeat);
                console.log(`Primary movement animation loaded into 'walk': ${primaryMoveClip.name}`);
             } else {
-                console.warn("CRITICAL: No 'walk' (or fallback run) animation found. Player movement may not animate.");
+                console.warn("CRITICAL: No suitable primary movement animation found. Player movement may not animate.");
             }
-             if (jumpClip) {
-                 this.animations['jump'] = this.mixer.clipAction(jumpClip);
-                 this.animations['jump'].setLoop(THREE.LoopOnce); // Jump animation plays once
-                 this.animations['jump'].clampWhenFinished = true; // Hold the last frame when done
-                 console.log("Jump animation loaded.");
-             } else {
-                 console.warn("Jump animation not found in model.");
-             }
-             if (attackClip) {
+            // Process all found walk animations
+            ['walking_a', 'walking_b', 'walking_backwards', 'walking_c'].forEach(name => {
+                if (this.animations[name] && this.animations[name] !== primaryMoveClip) { // Avoid re-processing if it's the primary
+                    this.animations[name] = this.mixer.clipAction(this.animations[name]);
+                    this.animations[name].setLoop(THREE.LoopRepeat);
+                    console.log(`${name} animation loaded.`);
+                } else if (this.animations[name] === primaryMoveClip && name !== 'walk') {
+                    // If it was chosen as primary, ensure it's also accessible by its specific name if different from 'walk'
+                    this.animations[name] = this.animations['walk']; 
+                }
+            });
+            // Process all found run animations
+            ['running_a', 'running_b'].forEach(name => {
+                if (this.animations[name] && this.animations[name] !== primaryMoveClip) {
+                    this.animations[name] = this.mixer.clipAction(this.animations[name]);
+                    this.animations[name].setLoop(THREE.LoopRepeat);
+                    console.log(`${name} animation loaded.`);
+                } else if (this.animations[name] === primaryMoveClip && name !== 'walk') {
+                     this.animations[name] = this.animations['walk'];
+                }
+            });
+            
+            // Process JUMP animations
+            const jumpAnims = {'jump': jumpClip, // 'jump' key will store the primary jump animation
+                               'jump_full_long': this.animations['jump_full_long'],
+                               'jump_full_short': this.animations['jump_full_short'],
+                               'jump_idle': this.animations['jump_idle']}; // Keep original Jump_Idle if it was specifically found and not the primary 'jumpClip'
+            
+            for (const [key, clip] of Object.entries(jumpAnims)) {
+                if (clip) {
+                    // If the clip is already an AnimationAction (because it was primaryMoveClip or similar), don't re-create
+                    if (clip instanceof THREE.AnimationClip) {
+                        this.animations[key] = this.mixer.clipAction(clip);
+                    } else if (clip instanceof THREE.AnimationAction) {
+                         this.animations[key] = clip; // Already an action
+                    } else {
+                        continue; // Skip if not a clip or action
+                    }
+                    this.animations[key].setLoop(THREE.LoopOnce);
+                    this.animations[key].clampWhenFinished = true;
+                    console.log(`${key} animation loaded (Clip: ${clip.name || clip._clip.name}).`);
+                } else {
+                    // Only warn if it's the primary 'jump' that's missing and wasn't found via 'Jump_Idle' or 'Jump'
+                    if (key === 'jump') console.warn("Primary jump animation ('Jump_Idle' or 'Jump') not found in model.");
+                    // else console.log(`${key} animation not found.`); // Less critical for non-primary jumps
+                }
+            }
+            if (attackClip) {
                 this.animations['attack'] = this.mixer.clipAction(attackClip);
                 this.animations['attack'].setLoop(THREE.LoopOnce);
                 // No clampWhenFinished needed if we transition back manually
@@ -152,6 +242,16 @@ export class Player {
              } else {
                 console.warn("1H_Melee_Attack_Chop animation not found in model.");
              }
+            // --- Load Death Animation ---
+            const deathClip = THREE.AnimationClip.findByName(clips, 'Death_A');
+            if (deathClip) {
+                this.animations['death'] = this.mixer.clipAction(deathClip);
+                this.animations['death'].setLoop(THREE.LoopOnce);
+                this.animations['death'].clampWhenFinished = true;
+                console.log("Death_A animation loaded as 'death'.");
+            } else {
+                console.warn("'Death_A' animation not found in model. Player death may not animate correctly.");
+            }
             // The 'runClip' loading block (previously here) has been removed
             // as its candidates ('Running_A', etc.) are now included in the
             // 'primaryMoveClip' search logic and loaded into this.animations['walk'].
@@ -268,6 +368,7 @@ export class Player {
                 nextAction.setLoop(THREE.LoopRepeat); // Idle and Walk should loop
                 if (this.currentAction) {
                     this.currentAction.crossFadeTo(nextAction, 0.3, true);
+                    nextAction.play(); // Ensure the idle/walk animation is played after fading
                 } else {
                     nextAction.play(); 
                 }
@@ -349,11 +450,14 @@ _handleInput(keys, inputHandler, deltaTime) {
             this.game.uiManager.updateMana(this.mana, this.maxMana);
         }
         this.isDefending = false; // Attack overrides defense
-        // Play attack sound immediately
-        if (this.game && this.game.attackSound) {
+        // Play the new player-specific attack sound
+        if (this.game && this.game.playerAttackSound) { // Check for the new sound
+            this.game.playSoundEffect(this.game.playerAttackSound);
+        } else if (this.game && this.game.attackSound) { // Fallback to generic attack sound if new one isn't loaded
+            console.warn("Player attack sound not loaded, using generic attack sound as fallback.");
             this.game.playSoundEffect(this.game.attackSound);
         }
-        console.log(`Attack triggered! Playing 'attack'. Mana left: ${this.mana}`); // Specify which attack for now
+        console.log(`Attack triggered! Playing player attack sound. Mana left: ${this.mana}`);
         // --- Deal Damage Logic ---
         this._dealDamage();
     } else if (leftMouseDown && this.mana < this.attackManaCost && !this.isAttacking && !this.isDefending && 
@@ -471,7 +575,26 @@ _applyMovement(deltaTime) {
                          this.velocity.sub(correctionAmount); // Reduce velocity into the tree
                     }
                 }
-            });
+			});
+		}
+        // --- World Border Check ---
+        if (environment && environment.ground) {
+            const groundSize = environment.ground.geometry.parameters.width;
+            const halfGroundSize = groundSize / 2;
+            if (this.mesh.position.x > halfGroundSize - PLAYER_RADIUS) {
+                this.mesh.position.x = halfGroundSize - PLAYER_RADIUS;
+                this.velocity.x = 0;
+            } else if (this.mesh.position.x < -halfGroundSize + PLAYER_RADIUS) {
+                this.mesh.position.x = -halfGroundSize + PLAYER_RADIUS;
+                this.velocity.x = 0;
+            }
+            if (this.mesh.position.z > halfGroundSize - PLAYER_RADIUS) {
+                this.mesh.position.z = halfGroundSize - PLAYER_RADIUS;
+                this.velocity.z = 0;
+            } else if (this.mesh.position.z < -halfGroundSize + PLAYER_RADIUS) {
+                this.mesh.position.z = -halfGroundSize + PLAYER_RADIUS;
+                this.velocity.z = 0;
+            }
         }
     }
     _updateCamera(deltaTime) {
@@ -512,9 +635,19 @@ _applyMovement(deltaTime) {
         console.log("Player controls and camera reset.");
     }
     takeDamage(amount) {
-        if (!this.isAlive) return;
-        this.health -= amount;
-        console.log(`Player took ${amount} damage, health is now ${this.health}`);
+if (!this.isAlive) return;
+let actualDamage = amount;
+if (this.isDefending) {
+    actualDamage *= (1 - this.defenseDamageReduction);
+    console.log(`Player defending! Reduced damage by ${this.defenseDamageReduction * 100}%. Original: ${amount}, Actual: ${actualDamage}`);
+    // Optionally, play a block sound effect here
+    // if (this.game && this.game.blockSound) {
+    //     this.game.playSoundEffect(this.game.blockSound);
+    // }
+}
+this.health -= actualDamage;
+this.health = Math.max(0, this.health); // Ensure health doesn't go below 0
+        console.log(`Player took ${actualDamage.toFixed(1)} damage (defending: ${this.isDefending}), health is now ${this.health.toFixed(1)}`);
         // TODO: Add visual feedback (e.g., screen flash, sound)
         if (this.health <= 0) {
             this.health = 0;
@@ -581,7 +714,12 @@ _applyMovement(deltaTime) {
                     const angle = playerForward.angleTo(directionToEnemy);
                     if (angle <= this.attackAngle / 2) { // Check if enemy is within the attack cone
                         console.log(`Player hit ${enemy.constructor.name}! Dealing ${this.attackDamage} damage.`);
+                        const enemyWasAlive = enemy.isAlive;
                         enemy.takeDamage(this.attackDamage);
+                        // If the enemy was alive before taking damage and is not alive now, report it as defeated
+                        if (enemyWasAlive && !enemy.isAlive) {
+                            this.game.reportEnemyDefeated(enemy);
+                        }
                     }
                 }
             }

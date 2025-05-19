@@ -1,6 +1,7 @@
 export class UIManager {
-    constructor(renderDiv) {
+    constructor(renderDiv, gameInstance) { // Added gameInstance
         this.renderDiv = renderDiv; // The div containing the canvas
+        this.gameInstance = gameInstance; // Store the game instance
         this.container = null;
         this.healthBarFill = null;
         this.manaBarFill = null;
@@ -16,17 +17,21 @@ export class UIManager {
         this.controlsHintElement = null; // For displaying game controls
         this.pauseMenuElement = null; // Added for pause menu
         this.gameOverScreenElement = null; // Added for game over screen
-        // this.bloomToggle = null; // REMOVED
-        // this.vignetteToggle = null; // REMOVED
+        this.inventoryPanelElement = null; // For the inventory panel
+        this.inventorySlotsDOMElements = []; // To store DOM refs for inventory slots
+        this.objectiveTextElement = null; // For displaying the objective message
+        this.shadowQualitySelect = null; // For shadow quality setting
         this._createStyles();
         this._createUIContainer();
         this._createMainMenu(); // Create menu first
         this._createSettingsPanel(); // Create settings panel
         this._createPauseMenu(); // Create pause menu
         this._createGameOverScreen(); // Create game over screen
+        this._createInventoryPanel(); // Create inventory panel
         this._createBars();
         this._createHotbar();
         this._createControlsHint(); // Create the controls hint
+        this._createObjectiveDisplay(); // Create the objective display
     }
     _createStyles() {
         const style = document.createElement('style');
@@ -348,6 +353,22 @@ export class UIManager {
                 font-weight: normal; /* Normal weight for checkbox labels */
                  color: #e0d6b3;
             }
+            .setting-item select {
+                padding: 8px;
+                background-color: rgba(80, 60, 40, 0.7);
+                border: 1px solid #a89468;
+                color: #e0d6b3;
+                border-radius: 4px;
+                font-family: 'Arial', sans-serif;
+                font-size: 0.9em;
+                cursor: pointer;
+                flex-grow: 1; /* Allow select to take space if in a flex row */
+            }
+            .setting-item select:focus {
+                outline: none;
+                border-color: #d4c08c;
+                box-shadow: 0 0 5px rgba(212, 192, 140, 0.5);
+            }
             /* Back button styled like menu buttons */
             .settings-back-button {
                  margin-top: 25px; /* Add space above back button */
@@ -366,12 +387,16 @@ export class UIManager {
                 position: absolute;
                 bottom: 15px;
                 right: 15px;
-                font-size: 0.85em;
-                color: rgba(220, 220, 220, 0.8);
-                text-shadow: 1px 1px 1px black;
-                z-index: 15; /* Above hotbar, below menu */
-                pointer-events: none;
-                display: none; /* Hidden by default, shown during gameplay */
+font-size: 0.85em;
+color: rgba(220, 220, 220, 0.8);
+text-shadow: 1px 1px 1px black;
+z-index: 15; /* Above hotbar, below menu */
+pointer-events: none;
+display: none; /* Hidden by default, shown during gameplay */
+padding: 8px;
+background-color: rgba(0, 0, 0, 0.3);
+border-radius: 4px;
+line-height: 1.5; /* Adjust for better readability of stacked lines */
             }
             @media (max-width: 600px) {
                 .controls-hint {
@@ -462,6 +487,192 @@ export class UIManager {
                 background: linear-gradient(to bottom, rgba(120, 50, 50, 0.95), rgba(90, 30, 30, 1.0));
                 border-color: #a04040;
             }
+            /* Objective Display Styles */
+            .objective-display {
+                position: absolute;
+                top: 20px;
+                right: 20px;
+                width: 250px; /* Adjust as needed */
+                padding: 10px;
+                background-color: rgba(30, 30, 30, 0.75);
+                border: 1px solid rgba(100, 100, 100, 0.5);
+                border-radius: 5px;
+                color: #e0d6b3; /* Parchment-like text */
+                font-size: 0.9em;
+                text-shadow: 1px 1px 2px rgba(0,0,0,0.6);
+                box-shadow: 0 1px 5px rgba(0,0,0,0.3);
+                display: none; /* Hidden by default, shown during gameplay with an objective */
+                z-index: 15; /* Same as controls hint, adjust if needed */
+                text-align: left;
+            }
+            @media (max-width: 768px) { /* Adjust breakpoint as needed */
+                .objective-display {
+                    width: 200px;
+                    top: 100px; /* Move below status bars on smaller screens */
+                    right: 10px;
+                    font-size: 0.8em;
+                }
+            }
+            /* Inventory Panel Styles */
+            .inventory-panel {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: 80%;
+                max-width: 500px; /* Max width for the panel */
+                min-height: 300px; /* Minimum height */
+                background-color: rgba(25, 20, 15, 0.92); /* Dark, slightly brown overlay */
+                border: 2px solid #786448; /* Dark wood-like border */
+                border-radius: 10px;
+                padding: 20px;
+                box-shadow: 0 5px 20px rgba(0, 0, 0, 0.6);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                z-index: 50; /* Above game UI, below menus */
+                opacity: 0;
+                visibility: hidden;
+                pointer-events: none;
+                transition: opacity 0.3s ease-out, visibility 0s linear 0.3s;
+                font-family: 'Arial', sans-serif;
+                flex-wrap: wrap; /* Allow content to wrap if needed */
+                justify-content: space-around; /* Distribute space for armor and grid */
+            }
+            .inventory-panel.visible {
+                opacity: 1;
+                visibility: visible;
+                pointer-events: all; /* Allow interaction when visible */
+                 transition: opacity 0.3s ease-out;
+            }
+            .inventory-title {
+                font-size: 2em;
+                color: #e0d6b3; /* Parchment color */
+                margin-bottom: 20px;
+                text-shadow: 1px 1px 3px rgba(0,0,0,0.7);
+                width: 100%; /* Ensure title spans full width above sections */
+                text-align: center;
+            }
+            .inventory-sections-container {
+                display: flex;
+                flex-direction: row; /* Armor and grid side-by-side */
+                justify-content: space-between; /* Or space-around */
+                align-items: flex-start; /* Align tops */
+                width: 100%;
+                gap: 20px; /* Space between armor section and grid */
+                margin-bottom: 10px; /* Space before close hint */
+            }
+            .armor-section {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 10px;
+                padding: 10px;
+                background-color: rgba(0,0,0,0.15);
+                border-radius: 5px;
+                width: 100px; /* Fixed width for armor section */
+            }
+            .armor-slot-placeholder { /* For the text like 'Helmet' */
+                font-size: 0.8em;
+                color: #a09070;
+                margin-bottom: -5px; /* Pull slot closer */
+            }
+            .inventory-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); /* Responsive columns */
+                gap: 10px;
+                flex-grow: 1; /* Grid takes remaining space */
+                padding: 10px;
+                background-color: rgba(0,0,0,0.2);
+                border-radius: 5px;
+                overflow-y: auto; /* Scroll if many items */
+                max-height: 260px; /* Adjusted height */
+            }
+            .inventory-slot-ui { /* Styles for both general and armor slots */
+                width: 60px;
+                height: 60px;
+                background-color: rgba(50, 40, 30, 0.7); /* Darker slot background */
+                border: 1px solid #605040;
+                border-radius: 4px;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                position: relative;
+                font-size: 9px;
+                color: #c0b090;
+                overflow: hidden; /* Clip item name if too long */
+                cursor: default; /* Or pointer if items are clickable */
+            }
+            .inventory-slot-ui.has-item {
+                border-color: #a89468; /* Highlight if has item */
+            }
+            .inventory-item-icon {
+                width: 32px;
+                height: 32px;
+                background-color: rgba(255,255,255,0.1); /* Placeholder icon color */
+                margin-bottom: 3px;
+                border-radius: 3px;
+                 /* background-image: url('path/to/default-icon.png'); For actual icons */
+                 background-size: contain;
+                 background-repeat: no-repeat;
+                 background-position: center;
+            }
+            .inventory-item-name {
+                text-align: center;
+                width: 100%;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                padding: 0 2px;
+            }
+            .inventory-item-quantity {
+                position: absolute;
+                bottom: 2px;
+                right: 4px;
+                font-size: 10px;
+                font-weight: bold;
+                color: #fff;
+                background-color: rgba(0,0,0,0.5);
+                padding: 1px 3px;
+                border-radius: 2px;
+            }
+            .inventory-panel-close-hint {
+                margin-top: 15px;
+                font-size: 0.9em;
+                color: #a09070;
+            }
+             @media (max-width: 600px) {
+                .inventory-panel {
+                .inventory-panel {
+                    width: 90%;
+                    padding: 15px;
+                }
+                .inventory-sections-container {
+                    flex-direction: column; /* Stack armor and grid on small screens */
+                    align-items: center;
+                }
+                .armor-section {
+                    width: 80%; /* Allow armor section to be wider */
+                    margin-bottom: 15px;
+                }
+                .inventory-title {
+                    font-size: 1.6em;
+                }
+                .inventory-grid {
+                    grid-template-columns: repeat(auto-fill, minmax(50px, 1fr));
+                    gap: 8px;
+                    max-height: 200px; /* Further adjust height */
+                }
+                .inventory-slot-ui {
+                    width: 50px;
+                    height: 50px;
+                }
+                .inventory-item-icon {
+                    width: 28px;
+                    height: 28px;
+                }
+            }
         `;
         document.head.appendChild(style);
     }
@@ -515,20 +726,31 @@ export class UIManager {
         this.settingsPanelElement.appendChild(controlsSection);
         // --- Graphics Section ---
         const graphicsSection = this._createSettingsSection('Graphics');
-        // Bloom Toggle REMOVED
-        // const bloomSetting = this._createCheckboxSetting('Bloom Effect:', 'bloom-toggle', true, (checkbox) => { this.bloomToggle = checkbox; });
-        // graphicsSection.appendChild(bloomSetting);
-        // Vignette Toggle REMOVED
-        // const vignetteSetting = this._createCheckboxSetting('Vignette Effect:', 'vignette-toggle', true, (checkbox) => { this.vignetteToggle = checkbox; });
-        // graphicsSection.appendChild(vignetteSetting);
-        // Only add graphics section if it has content (e.g., if other toggles are added later)
-        // For now, since it's empty, we can conditionally not add it or add it with a "more coming soon" message
+        // Shadow Quality Setting
+        const shadowOptions = [
+            { value: 'disabled', text: 'Disabled' },
+            { value: 'low', text: 'Low' },
+            { value: 'medium', text: 'Medium' },
+            { value: 'high', text: 'High' }
+        ];
+        const shadowQualitySetting = this._createDropdownSetting(
+            'Shadow Quality:', 'shadow-quality-select', shadowOptions, 'high', // Default to High
+            (select) => { 
+                this.shadowQualitySelect = select; 
+                // Add event listener here, ensuring gameInstance is available
+                if (this.gameInstance && typeof this.gameInstance.applyShadowQuality === 'function') {
+                    select.addEventListener('change', (event) => {
+                        this.gameInstance.applyShadowQuality(event.target.value);
+                    });
+                } else {
+                    console.warn("UIManager: Game instance or applyShadowQuality method not available for shadow settings.");
+                }
+            }
+        );
+        graphicsSection.appendChild(shadowQualitySetting);
+        // Only add graphics section if it has content
         if (graphicsSection.childElementCount > 1) { // Check if more than just title is present
             this.settingsPanelElement.appendChild(graphicsSection);
-        } else {
-            // Optionally, you could add a placeholder message if the section is empty.
-            // For now, just don't append an empty section.
-            console.log("Graphics settings section is empty, not adding to panel.");
         }
         // --- Back Button ---
         const backButton = this._createMenuButton('Back', 'settings-back');
@@ -628,6 +850,35 @@ export class UIManager {
         if (refCallback) refCallback(checkbox);
         return settingItem;
     }
+    _createDropdownSetting(labelText, selectId, options, defaultValue, refCallback) {
+        const settingItem = document.createElement('div');
+        settingItem.className = 'setting-item';
+        const label = document.createElement('label');
+        label.setAttribute('for', selectId);
+        label.textContent = labelText;
+        const select = document.createElement('select');
+        select.id = selectId;
+        options.forEach(opt => {
+            const optionElement = document.createElement('option');
+            optionElement.value = typeof opt === 'object' ? opt.value : opt;
+            optionElement.textContent = typeof opt === 'object' ? opt.text : opt;
+            if ((typeof opt === 'object' ? opt.value : opt) === defaultValue) {
+                optionElement.selected = true;
+            }
+            select.appendChild(optionElement);
+        });
+        // On smaller screens, label is above. On larger, it's to the side.
+        // The select itself will be added directly if label is stacked, or inside a container if side-by-side.
+        // For simplicity here, and consistency with _createSliderSetting, we'll assume direct appending.
+        // If more complex layout needed per setting, more containers would be used like in _createSliderSetting.
+        const controlContainer = document.createElement('div'); // Use a container for flex-grow if needed
+        controlContainer.style.flexGrow = "1"; // Allow select to take available space in row layout
+        controlContainer.appendChild(select);
+        settingItem.appendChild(label);
+        settingItem.appendChild(controlContainer); // Add select (or its container)
+        if (refCallback) refCallback(select);
+        return settingItem;
+    }
     _createMenuButton(text, id) {
         const button = document.createElement('button');
         button.className = 'menu-button';
@@ -679,10 +930,83 @@ export class UIManager {
         this.container.appendChild(this.hotbarContainer);
     }
     _createControlsHint() {
-        this.controlsHintElement = document.createElement('div');
-        this.controlsHintElement.className = 'controls-hint';
-        this.controlsHintElement.textContent = 'WASD - Movement | ESC - Show Mouse / Pause';
-        this.container.appendChild(this.controlsHintElement);
+this.controlsHintElement = document.createElement('div');
+this.controlsHintElement.className = 'controls-hint';
+this.controlsHintElement.innerHTML = `
+            WASD: Move <br>
+            Space: Jump <br>
+            LMB: Attack <br>
+            RMB: Block <br>
+            I: Inventory <br>
+            ESC: Pause / Mouse
+        `;
+this.container.appendChild(this.controlsHintElement);
+    }
+    _createObjectiveDisplay() {
+        this.objectiveTextElement = document.createElement('div');
+        this.objectiveTextElement.className = 'objective-display';
+        this.objectiveTextElement.textContent = ''; // Initial empty text
+        this.container.appendChild(this.objectiveTextElement);
+    }
+    _createInventoryPanel(slotCount = 12) { // Default to 12 slots
+        this.inventoryPanelElement = document.createElement('div');
+        this.inventoryPanelElement.className = 'inventory-panel'; // Hidden by default via CSS
+        const title = document.createElement('h2');
+        title.className = 'inventory-title';
+        title.textContent = 'Inventory';
+        this.inventoryPanelElement.appendChild(title);
+        const sectionsContainer = document.createElement('div');
+        sectionsContainer.className = 'inventory-sections-container';
+        // Armor Section
+        const armorSection = document.createElement('div');
+        armorSection.className = 'armor-section';
+        const armorTypes = ['Helmet', 'Chestplate', 'Leggings', 'Boots'];
+        this.armorSlotsDOMElements = {}; // Store armor slots by type
+        armorTypes.forEach(type => {
+            const placeholderText = document.createElement('div');
+            placeholderText.className = 'armor-slot-placeholder';
+            placeholderText.textContent = type;
+            armorSection.appendChild(placeholderText);
+            const slotElement = this._createSingleInventorySlotDOM(`armor-${type.toLowerCase()}`);
+            // We can add specific dataset or class for armor type if needed later
+            // slotElement.slotElement.dataset.armorType = type.toLowerCase();
+            armorSection.appendChild(slotElement.slotElement);
+            this.armorSlotsDOMElements[type.toLowerCase()] = slotElement;
+        });
+        sectionsContainer.appendChild(armorSection);
+        // Inventory Grid Section
+        const inventoryGrid = document.createElement('div');
+        inventoryGrid.className = 'inventory-grid';
+        this.inventorySlotsDOMElements = []; // For general inventory
+        for (let i = 0; i < slotCount; i++) {
+            const slotDOM = this._createSingleInventorySlotDOM(`inventory-${i}`);
+            inventoryGrid.appendChild(slotDOM.slotElement);
+            this.inventorySlotsDOMElements.push(slotDOM);
+        }
+        sectionsContainer.appendChild(inventoryGrid);
+        this.inventoryPanelElement.appendChild(sectionsContainer);
+        const closeHint = document.createElement('p');
+        closeHint.className = 'inventory-panel-close-hint';
+        closeHint.textContent = "Press 'I' to close";
+        this.inventoryPanelElement.appendChild(closeHint);
+        this.container.appendChild(this.inventoryPanelElement);
+    }
+    _createSingleInventorySlotDOM(idSuffix) {
+        const slotElement = document.createElement('div');
+        slotElement.className = 'inventory-slot-ui';
+        slotElement.id = `slot-${idSuffix}`; // Unique ID for each slot
+        const iconElement = document.createElement('div');
+        iconElement.className = 'inventory-item-icon';
+        const nameElement = document.createElement('div');
+        nameElement.className = 'inventory-item-name';
+        nameElement.textContent = '';
+        const quantityElement = document.createElement('div');
+        quantityElement.className = 'inventory-item-quantity';
+        quantityElement.textContent = '';
+        slotElement.appendChild(iconElement);
+        slotElement.appendChild(nameElement);
+        slotElement.appendChild(quantityElement);
+        return { slotElement, iconElement, nameElement, quantityElement };
     }
     // --- Control Methods ---
     showMainMenu() {
@@ -716,12 +1040,16 @@ export class UIManager {
         if (this.statusBarContainer) this.statusBarContainer.style.display = 'block';
         if (this.hotbarContainer) this.hotbarContainer.style.display = 'flex';
         if (this.controlsHintElement) this.controlsHintElement.style.display = 'block'; // Show controls hint
+        if (this.objectiveTextElement && this.objectiveTextElement.textContent.trim() !== "") {
+            this.objectiveTextElement.style.display = 'block'; // Show objective if it has text
+        }
     }
     hideGameUI() {
-       // Hide health/mana bars, hotbar, and controls hint
+       // Hide health/mana bars, hotbar, controls hint, and objective display
         if (this.statusBarContainer) this.statusBarContainer.style.display = 'none';
         if (this.hotbarContainer) this.hotbarContainer.style.display = 'none';
         if (this.controlsHintElement) this.controlsHintElement.style.display = 'none'; // Hide controls hint
+        if (this.objectiveTextElement) this.objectiveTextElement.style.display = 'none'; // Hide objective display
     }
     showPauseMenu() {
         if (this.pauseMenuElement) {
@@ -743,6 +1071,22 @@ export class UIManager {
             this.gameOverScreenElement.classList.remove('visible');
         }
     }
+    toggleInventoryPanel() {
+        if (this.inventoryPanelElement) {
+            const isVisible = this.inventoryPanelElement.classList.toggle('visible');
+            if (isVisible) {
+                // Potentially call updateInventoryDisplay here if needed immediately upon opening
+                // Example: this.updateInventoryDisplay(game.player.inventory.getItems());
+                // This requires passing game instance or player inventory to UIManager
+                // For now, game loop will handle updating it.
+                console.log("Inventory panel shown");
+            } else {
+                console.log("Inventory panel hidden");
+            }
+            return isVisible; // Return the new visibility state
+        }
+        return false; // Return false if panel element doesn't exist
+    }
      // --- Getters for Control Elements ---
     getVolumeSlider() {
          return this.volumeSlider;
@@ -755,6 +1099,9 @@ export class UIManager {
     }
     getSensitivityValueLabel() {
         return this.sensitivityValueLabel;
+    }
+    getShadowQualitySelect() {
+        return this.shadowQualitySelect;
     }
     // getBloomToggle() REMOVED
     // getVignetteToggle() REMOVED
@@ -780,4 +1127,41 @@ export class UIManager {
             // this.hotbarSlots[slotIndex].innerHTML = content; // Or modify specific elements
         }
     }
-}
+    updateInventoryDisplay(inventoryItems) { // inventoryItems is an array from Player's Inventory class
+        if (!this.inventorySlotsDOMElements || this.inventorySlotsDOMElements.length === 0) return;
+        this.inventorySlotsDOMElements.forEach((slotDOM, index) => {
+            const item = inventoryItems[index]; // Get item from the passed array
+            if (item) {
+                slotDOM.slotElement.classList.add('has-item');
+                slotDOM.nameElement.textContent = item.name || 'Unknown Item';
+                // For icon: slotDOM.iconElement.style.backgroundImage = `url(${item.icon || 'path/to/default.png'})`;
+                // For now, just a visual cue if an item exists
+                slotDOM.iconElement.style.backgroundColor = item.icon ? 'rgba(100,150,200,0.5)' : 'rgba(150,150,150,0.3)'; // Example color change
+                if (item.quantity > 1) {
+                    slotDOM.quantityElement.textContent = item.quantity;
+                    slotDOM.quantityElement.style.display = 'block';
+                } else {
+                    slotDOM.quantityElement.textContent = '';
+                    slotDOM.quantityElement.style.display = 'none';
+                }
+            } else {
+                slotDOM.slotElement.classList.remove('has-item');
+                slotDOM.nameElement.textContent = '';
+                slotDOM.iconElement.style.backgroundColor = 'rgba(255,255,255,0.1)'; // Default empty icon style
+                slotDOM.iconElement.style.backgroundImage = '';
+                slotDOM.quantityElement.textContent = '';
+                slotDOM.quantityElement.style.display = 'none';
+            }
+        });
+    }
+    updateObjective(message) {
+        if (this.objectiveTextElement) {
+            this.objectiveTextElement.textContent = message;
+            if (message && message.trim() !== "") {
+                this.objectiveTextElement.style.display = 'block';
+            } else {
+                this.objectiveTextElement.style.display = 'none';
+            }
+        }
+        }
+    }
