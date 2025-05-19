@@ -6,6 +6,7 @@ import { Environment } from 'environment';
 import { UIManager } from 'UIManager';
 import { MenuEffects } from 'MenuEffects';
 import { Enemy } from 'Enemy'; // Import the Enemy class
+const NUM_SKELETONS_OBJECTIVE = 5; // Number of enemies for the objective
 // Postprocessing imports
 import { EffectComposer, RenderPass } from 'postprocessing'; // Simplified imports
 // Fog is removed - Constants no longer needed
@@ -16,7 +17,8 @@ const BACKGROUND_MUSIC_URL = 'https://play.rosebud.ai/assets/Clement Panchout_ V
 const GAME_PLAY_MUSIC_URL = 'https://play.rosebud.ai/assets/Clement Panchout _ LJ_Tel_DnB.wav?8HYT';
 // Placeholder URLs - Replace with actual sound asset URLs
 const JUMP_SOUND_URL = 'https://play.rosebud.ai/assets/zapsplat_multimedia_game_sound_classic_jump_002_40395.mp3'; // Replace with actual URL
-const ATTACK_SOUND_URL = 'https://play.rosebud.ai/assets/zapsplat_warfare_sword_swing_fast_whoosh_blade_001_110489.mp3'; // Replace with actual URL
+const ATTACK_SOUND_URL = 'https://play.rosebud.ai/assets/zapsplat_warfare_sword_swing_fast_whoosh_blade_001_110489.mp3'; // This was the old player attack sound, will be updated or removed based on usage
+const PLAYER_ATTACK_SOUND_URL = 'https://play.rosebud.ai/assets/22_Slash_04.wav?Ed4T'; // New player attack sound
 const UI_CLICK_SOUND_URL = 'https://play.rosebud.ai/assets/mixkit-select-click-1109.wav?k0k0'; // Updated with new asset
 // Enum for game states
 const GameState = {
@@ -28,11 +30,23 @@ const GameState = {
 export class Game {
     constructor(renderDiv) {
         this.renderDiv = renderDiv;
-        this.scene = new THREE.Scene();
+        this.scene = new THREE.Scene(); // Initialize a scene instance
+        // Call setupScene early and use its returned value.
+        // This ensures that any modifications or a new scene instance returned by setupScene
+        // becomes the authoritative `this.scene` before it's used by RenderPass or other components.
+        
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.clock = new THREE.Clock();
         this.composer = null; // Added for post-processing
+        this.mainDirectionalLight = null; // To store the main light for shadow adjustments
+        
+        // Initialize scene and main light from sceneSetup.js
+        // sceneSetup.js now returns an object { scene, directionalLight }
+        const sceneSetupResult = setupScene(this.camera); // Pass camera as per sceneSetup.js signature
+        this.scene = sceneSetupResult.scene;
+        this.mainDirectionalLight = sceneSetupResult.directionalLight;
+        
         // References to specific effects and passes removed
         this.player = null;
         this.inputHandler = null;
@@ -45,14 +59,20 @@ export class Game {
             this.gamePlayMusic = null; // To hold the loaded main game music
             this.enemies = []; // Array to hold enemy instances
             this.jumpSound = null; // To hold jump sound effect
-            this.attackSound = null; // To hold attack sound effect
+            this.attackSound = null; // To hold generic attack sound effect (might be for enemies or old player)
+            this.playerAttackSound = null; // To hold the new player-specific attack sound
             this.uiClickSound = null; // To hold UI click sound effect
             this.audioLoader = new THREE.AudioLoader(); // Reusable loader
             this.isAudioContextResumed = false; // Track if user interaction resumed context
             this.isMusicLoaded = false; // Track menu music loading status
             this.isGameMusicLoaded = false; // Track game music loading status
-            this.areSoundsLoaded = { jump: false, attack: false, uiClick: false }; // Track SFX loading
+            this.areSoundsLoaded = { jump: false, attack: false, playerAttack: false, uiClick: false }; // Track SFX loading
         this._escapePressedLastFrame = false; // For detecting single escape key press
+        this._iPressedLastFrame = false; // For detecting single 'I' key press for inventory
+        this.objectiveMessage = ""; // Current objective message
+        this.enemiesToEliminateInitialCount = NUM_SKELETONS_OBJECTIVE;
+        this.enemiesToEliminateRemaining = NUM_SKELETONS_OBJECTIVE;
+        this.activeVisualEffects = []; // For spawn effects, etc.
         // Game settings
         this.settings = {
             cameraSensitivity: 1.0, // Default sensitivity
@@ -61,7 +81,7 @@ export class Game {
         this._setupRenderer();
         this._setupAudio(); // Setup audio listener and load music
         this._setupUI(); // Setup UI before renderer appends canvas
-        this._setupScene();
+        this._configureScene(); // Renamed from _setupScene, configures the scene set from sceneSetupResult
         this._setupMenuEffects(); // MenuEffects are created
         this._setupPlayer(); // Player needs game instance for sounds
         this._setupInput();
@@ -128,6 +148,19 @@ export class Game {
             console.error('Error loading attack sound:', error);
             this.areSoundsLoaded.attack = false;
         });
+        // Load Player Specific Attack Sound
+        console.log("Starting player attack sound load...");
+        this.audioLoader.load(PLAYER_ATTACK_SOUND_URL, (buffer) => {
+            this.playerAttackSound = new THREE.Audio(this.audioListener);
+            this.playerAttackSound.setBuffer(buffer);
+            this.playerAttackSound.setLoop(false);
+            this.playerAttackSound.setVolume(0.6); // Adjust volume as needed
+            this.areSoundsLoaded.playerAttack = true;
+            console.log("Player attack sound loaded.");
+        }, undefined, (error) => {
+            console.error('Error loading player attack sound:', error);
+            this.areSoundsLoaded.playerAttack = false;
+        });
         // Load UI Click Sound
         console.log("Starting UI click sound load...");
         this.audioLoader.load(UI_CLICK_SOUND_URL, (buffer) => {
@@ -184,12 +217,10 @@ export class Game {
         this.playMenuMusicIfReady();
         this.stopGameMusic(); // Ensure game music is stopped when entering menu
     }
-    _setupScene() {
-        // Removed fog setup
-        // this.scene.background = new THREE.Color(FOG_COLOR);
-        // this.scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR);
-        this.scene.background = new THREE.Color(0x6e7f9e); // Keep background color for now
-        setupScene(this.scene);
+    // Renamed from _setupScene to _configureScene as primary scene setup is now from sceneSetup.js in constructor
+    _configureScene() { 
+        // Fog and background are now handled by sceneSetup.js (via createSky and direct fog setting)
+        // The main scene (this.scene) is already established from sceneSetupResult in the constructor.
         this.environment = new Environment(this.scene);
         this.scene.environment = this.environment; // Make environment accessible for Enemy ground check
     }
@@ -341,6 +372,24 @@ export class Game {
                  }
             });
         }
+        // --- Shadow Quality Selector ---
+        // Assumes UIManager has a getShadowQualitySelector() method returning the select element
+        const shadowQualitySelector = this.uiManager.getShadowQualitySelector ? this.uiManager.getShadowQualitySelector() : null;
+        if (shadowQualitySelector) {
+            const initialShadowQuality = shadowQualitySelector.value || 'high'; // Default to high to match sceneSetup
+            this.applyShadowQuality(initialShadowQuality); // Apply on load
+            shadowQualitySelector.addEventListener('change', (e) => {
+                this.playSoundEffect(this.uiClickSound, true);
+                this.applyShadowQuality(e.target.value);
+            });
+        } else {
+            console.warn("Shadow quality selector not available in UIManager. Defaulting to initial shadow settings.");
+            // Apply a default quality if selector not found, ensuring shadows are at least initialized.
+            // sceneSetup.js already configures shadows to high quality by default.
+             if (this.mainDirectionalLight) { // Ensure light exists before trying to apply a default
+                this.applyShadowQuality('high'); // Match sceneSetup.js default
+            }
+        }
     }
     applyGraphicsSettings() {
         if (!this.composer) return;
@@ -353,6 +402,126 @@ export class Game {
         this.composer.reset();
         this.composer.setSize(window.innerWidth, window.innerHeight);
     }
+applyShadowQuality(quality) {
+    if (!this.mainDirectionalLight || !this.renderer) { // Ensure renderer exists
+        console.warn("Main directional light or renderer not available to apply shadow quality.");
+        return;
+    }
+    let targetQualityLog = quality;
+    quality = quality.toLowerCase();
+    let enableShadowsGlobally; // For renderer.shadowMap.enabled and individual light.castShadow
+    // Determine global shadow state based on quality
+    switch (quality) {
+        case 'disabled':
+            enableShadowsGlobally = false;
+            break;
+        case 'low':
+        case 'medium':
+        case 'high':
+            enableShadowsGlobally = true;
+            break;
+        default:
+            console.warn(`Unknown shadow quality: ${targetQualityLog}. Defaulting to Medium.`);
+            targetQualityLog = 'medium (defaulted)';
+            enableShadowsGlobally = true;
+    }
+    let changed = false;
+    // 1. Set global renderer shadow state
+    if (this.renderer.shadowMap.enabled !== enableShadowsGlobally) {
+        this.renderer.shadowMap.enabled = enableShadowsGlobally;
+        changed = true;
+    }
+    // 2. Handle all lights and materials in the scene
+    this.scene.traverse((object) => {
+        if (object.isLight) {
+            const canCastShadow = object.isDirectionalLight || object.isPointLight || object.isSpotLight;
+            if (canCastShadow) {
+                // For lights that can cast shadows, align with enableShadowsGlobally
+                if (object.castShadow !== enableShadowsGlobally) {
+                    object.castShadow = enableShadowsGlobally;
+                    changed = true;
+                }
+                // If disabling shadows (globally), and this light was casting them, clear its shadow map
+                if (!enableShadowsGlobally && object.shadow && object.shadow.map) {
+                    object.shadow.map.dispose();
+                    object.shadow.map = null;
+                    // The 'changed' flag is intentionally not set here for map disposal,
+                    // aligning with the original commented-out behavior. It primarily tracks
+                    // changes to direct shadow properties like quality, mapSize, or if a
+                    // light starts/stops casting shadows.
+                }
+            } else {
+                // For lights that cannot cast shadows (e.g., AmbientLight, HemisphereLight),
+                // ensure castShadow is always false to prevent warnings.
+                if (object.castShadow === true) { // If it was incorrectly set to true
+                    object.castShadow = false;
+                    changed = true; // This is a corrective change.
+                }
+                // These lights don't have .shadow or .shadow.map properties to clean up.
+            }
+        }
+        // Force material update when shadow status changes
+        if (object.material) {
+            if (Array.isArray(object.material)) {
+                object.material.forEach(m => { if (m) m.needsUpdate = true; });
+            } else {
+                object.material.needsUpdate = true;
+            }
+        }
+    });
+    // 3. Specific handling for mainDirectionalLight's map size (if shadows are enabled)
+    if (enableShadowsGlobally && this.mainDirectionalLight && this.mainDirectionalLight.shadow) {
+        let newMapSize;
+        const previousMapSize = this.mainDirectionalLight.shadow.mapSize.width;
+        switch (quality) { // 'quality' is already lowercased
+            case 'low': newMapSize = 1024; break;
+            case 'medium': newMapSize = 2048; break;
+            case 'high': newMapSize = 4096; break;
+            default: newMapSize = 2048; // From the defaulted 'medium' case
+        }
+        if (this.mainDirectionalLight.shadow.mapSize.width !== newMapSize ||
+            this.mainDirectionalLight.shadow.mapSize.height !== newMapSize) {
+            this.mainDirectionalLight.shadow.mapSize.width = newMapSize;
+            this.mainDirectionalLight.shadow.mapSize.height = newMapSize;
+            if (this.mainDirectionalLight.shadow.map) this.mainDirectionalLight.shadow.map.dispose();
+            this.mainDirectionalLight.shadow.map = null; // Force regeneration
+            changed = true;
+        } else if (this.mainDirectionalLight.castShadow && !this.mainDirectionalLight.shadow.map) {
+            // If shadows are on, but map is null (e.g., just turned on or quality change didn't alter size but requires regen)
+            this.mainDirectionalLight.shadow.map = null; // Ensure it's null to trigger regeneration
+            changed = true; // Needs regeneration
+        }
+    }
+    
+    // Logging
+    if (changed) {
+        const rendererStatus = this.renderer.shadowMap.enabled ? "Enabled" : "Disabled";
+        let mainLightStatus = "N/A";
+        let mainLightMapSizeLog = "N/A";
+        if (this.mainDirectionalLight) {
+            mainLightStatus = this.mainDirectionalLight.castShadow ? "Enabled" : "Disabled";
+            if (this.mainDirectionalLight.shadow) {
+                 mainLightMapSizeLog = `${this.mainDirectionalLight.shadow.mapSize.width}x${this.mainDirectionalLight.shadow.mapSize.height}`;
+            }
+        }
+        
+        if (this.renderer.shadowMap.enabled) {
+            console.log(`Shadows updated to ${targetQualityLog}: Renderer: ${rendererStatus}. Main Light Cast: ${mainLightStatus}, MapSize: ${mainLightMapSizeLog}. Scene lights iterated for state sync.`);
+        } else {
+            console.log(`Shadows updated to ${targetQualityLog}: Renderer: ${rendererStatus}. Main Light Cast: ${mainLightStatus}. Scene lights iterated and shadows disabled.`);
+        }
+    } else {
+        const rendererStatus = this.renderer.shadowMap.enabled ? "Enabled" : "Disabled";
+        let mainLightStatus = "N/A", currentMapSizeLog = "N/A";
+        if (this.mainDirectionalLight) {
+            mainLightStatus = this.mainDirectionalLight.castShadow ? "Enabled" : "Disabled";
+            if (this.mainDirectionalLight.shadow) {
+                currentMapSizeLog = `${this.mainDirectionalLight.shadow.mapSize.width}x${this.mainDirectionalLight.shadow.mapSize.height}`;
+            }
+        }
+        console.log(`Shadow settings for '${targetQualityLog}' effectively unchanged. Current: Renderer: ${rendererStatus}, Main Light Cast: ${mainLightStatus}, Main Light MapSize ${currentMapSizeLog}. Scene lights iterated.`);
+    }
+}
     async _attemptResumeAudioContext() {
         if (!this.isAudioContextResumed && this.audioListener && this.audioListener.context.state === 'suspended') {
             console.log("Attempting to resume audio context...");
@@ -496,12 +665,67 @@ export class Game {
          sound.play();
     }
     _setupEnemies() {
-        // For now, let's add one enemy. Player needs to be available.
-        if (this.player) {
-            const enemy = new Enemy(this.scene, this.player);
+        if (!this.player) {
+            console.warn("Player not initialized, cannot setup enemies yet.");
+            return;
+        }
+        // Clear existing enemies
+        this.enemies.forEach(enemy => {
+            if (enemy.mesh) {
+                this.scene.remove(enemy.mesh);
+            }
+            // Call a dispose method on enemy if it exists to clean up resources
+            if (typeof enemy.dispose === 'function') {
+                enemy.dispose();
+            }
+        });
+        this.enemies = [];
+        console.log(`Setting up ${NUM_SKELETONS_OBJECTIVE} skeleton enemies for the objective.`);
+        // Define parameters for circular spawning
+        const spawnCircleCenter = new THREE.Vector3(0, 0, -15); // Center of the enemy spawn circle (player starts near z=5)
+        const spawnCircleRadius = 10;  // Radius of the circle, ensuring decent spacing
+        // Ensure NUM_SKELETONS_OBJECTIVE is positive to avoid division by zero, though it's a const
+        const angleIncrement = NUM_SKELETONS_OBJECTIVE > 0 ? (2 * Math.PI) / NUM_SKELETONS_OBJECTIVE : 0;
+        for (let i = 0; i < NUM_SKELETONS_OBJECTIVE; i++) {
+            // Calculate unique spawn positions for each enemy in a circle
+            const angle = i * angleIncrement;
+            const spawnX = spawnCircleCenter.x + Math.cos(angle) * spawnCircleRadius;
+            const spawnZ = spawnCircleCenter.z + Math.sin(angle) * spawnCircleRadius;
+            // Y position (spawnCircleCenter.y) is a base; Enemy class adjusts to actual ground height.
+            const spawnPosition = new THREE.Vector3(spawnX, spawnCircleCenter.y, spawnZ);
+            
+            // Play spawn effect before creating the enemy instance or adding its mesh
+            Enemy.playSpawnEffect(this.scene, spawnPosition, this.activeVisualEffects);
+            const enemy = new Enemy(this.scene, this.player, spawnPosition, this.audioListener); // Pass audioListener
             this.enemies.push(enemy);
+        }
+        
+        this.enemiesToEliminateRemaining = this.enemies.length;
+        this._updateObjectiveDisplay();
+    }
+    reportEnemyDefeated(enemy) {
+        // This method is called by Player.js when an enemy's !isAlive status is first detected after an attack.
+        // We recalculate remaining enemies to be sure.
+        this._updateObjectiveDisplay();
+    }
+    _updateObjectiveDisplay() {
+        const liveEnemies = this.enemies.filter(e => e.isAlive).length;
+        this.enemiesToEliminateRemaining = liveEnemies;
+        if (this.enemiesToEliminateRemaining > 0) {
+            this.objectiveMessage = `Eliminate the skeletons: ${this.enemiesToEliminateRemaining} remaining`;
+        } else if (this.enemies.length > 0) { // Check if enemies were spawned at all
+            this.objectiveMessage = "All skeletons eliminated! Objective complete!";
+            // TODO: Add further objective completion logic (e.g., next level, reward)
+            console.log("Objective Complete: All skeletons eliminated!");
         } else {
-            console.warn("Player not initialized before _setupEnemies was called.");
+            this.objectiveMessage = ""; // No objective if no enemies were set up
+        }
+        // Placeholder for actual UI update
+        console.log("OBJECTIVE UPDATE:", this.objectiveMessage);
+        if (this.uiManager && typeof this.uiManager.updateObjective === 'function') {
+            this.uiManager.updateObjective(this.objectiveMessage);
+        } else {
+            // console.warn("UIManager or UIManager.updateObjective method not available.");
         }
     }
     gameOver() {
@@ -530,58 +754,34 @@ export class Game {
             this.player.health = this.player.maxHealth;
             this.player.mana = this.player.maxMana; // Or a starting mana
             this.player.isAlive = true;
-            this.player.mesh.position.set(0, 0, 5); // Reset position
+            // Player position reset is handled by player.resetControlsAndCamera or initial spawn
+            this.player.mesh.position.set(0, 0, 5); // Explicitly reset position
             this.player.velocity.set(0, 0, 0);
-            this.player.onGround = false; // Will be re-evaluated
-             if (this.player.animations['idle'] && this.player.mixer) {
+            this.player.onGround = false; // Will be re-evaluated by physics
+            this.player.resetControlsAndCamera(); // Resets camera and input states
+            // Attempt to reset animation to idle
+            if (this.player.animations && this.player.animations['idle'] && this.player.mixer) {
                 const idleAction = this.player.animations['idle'];
-                if (this.player.currentAction) {
+                idleAction.reset();
+                if (this.player.currentAction && this.player.currentAction !== idleAction) {
                     this.player.currentAction.crossFadeTo(idleAction, 0.1, true);
                 } else {
-                    idleAction.reset().play();
+                    idleAction.play();
                 }
                 this.player.currentAction = idleAction;
             }
-            if (this.uiManager) { // Update UI
-                 this.uiManager.updateHealth(this.player.health, this.player.maxHealth);
-                 this.uiManager.updateMana(this.player.mana, this.player.maxMana);
+            if (this.uiManager) { // Update UI for player stats
+                this.uiManager.updateHealth(this.player.health, this.player.maxHealth);
+                this.uiManager.updateMana(this.player.mana, this.player.maxMana);
             }
         }
-        // Reset enemies
-        this.enemies.forEach(enemy => {
-            // Simple reset: respawn at initial position with full health
-            // A more robust enemy.reset() method would be better
-            enemy.health = enemy.maxHealth;
-            enemy.isAlive = true;
-            if (enemy.mesh) { // Ensure mesh exists
-                 // Use the constant for initial position if it's stored or accessible
-                 // For now, hardcoding a general area for respawn.
-                 // This should ideally come from enemy's own initial config or a spawn point system.
-                enemy.mesh.position.set(Math.random() * 10 - 5, 0, Math.random() * 10 - 5);
-                enemy.velocity.set(0,0,0);
-                enemy.onGround = false; // will be re-evaluated
-                if(enemy.animations['idle'] && enemy.mixer){
-                    const idleAction = enemy.animations['idle'];
-                    if(enemy.currentAction) {
-                        enemy.currentAction.crossFadeTo(idleAction, 0.1, true);
-                    } else {
-                        idleAction.reset().play();
-                    }
-                    enemy.currentAction = idleAction;
-                }
-            }
-            if (!enemy.mesh.parent) { // If enemy was removed from scene on death
-                this.scene.add(enemy.mesh);
-            }
-        });
-        if (this.enemies.length === 0) { // If all enemies were removed, re-setup
-            this._setupEnemies();
-        }
+        // Reset enemies by calling _setupEnemies which handles clearing and re-populating
+        this._setupEnemies(); // This will also call _updateObjectiveDisplay
         // Change game state and UI
         this.gameState = GameState.PLAYING;
         if (this.uiManager) {
             this.uiManager.hideGameOverScreen();
-            this.uiManager.showGameUI();
+            this.uiManager.showGameUI(); // Ensures game UI elements are visible
         }
         // Music handling for restart
         this.stopMenuMusic(); // Ensure menu music is definitely stopped
@@ -707,7 +907,37 @@ export class Game {
             // Potentially update menu effects if they are shown behind pause menu.
             // For now, we keep the 3D scene static.
         } else if (this.gameState === GameState.GAMEOVER) {
-            if(this.player) this.player.update(deltaTime, {}, this.inputHandler, this.environment);
+            if(this.player) this.player.update(deltaTime, {}, this.inputHandler, this.environment); // Allow player inputs for potential game over interactions
+        }
+        // Inventory Toggle Logic (Handles 'I' key press)
+        if (this.inputHandler && this.uiManager) {
+            const iCurrentlyPressed = this.inputHandler.keys['i'];
+            if (iCurrentlyPressed && !this._iPressedLastFrame && this.gameState === GameState.PLAYING) {
+                const inventoryBecameVisible = this.uiManager.toggleInventoryPanel();
+                if (inventoryBecameVisible) {
+                    if (this.player && this.player.inventory) {
+                        this.uiManager.updateInventoryDisplay(this.player.inventory.getItems());
+                    } else {
+                        console.warn("Player or player inventory not available to update display. Showing empty inventory.");
+                        this.uiManager.updateInventoryDisplay([]); // Show empty panel
+                    }
+                    // Unlock pointer if inventory is open and pointer is locked
+                    if (this.inputHandler.pointerLocked) {
+                        this.inputHandler.unlockPointer();
+                    }
+                }
+                // Note: We don't auto-relock pointer when inventory closes,
+                // as user might want to interact with other UI or needs to manually re-lock (RMB).
+            }
+            this._iPressedLastFrame = iCurrentlyPressed;
+        }
+        // Update active visual effects
+        for (let i = this.activeVisualEffects.length - 1; i >= 0; i--) {
+            const effect = this.activeVisualEffects[i];
+            effect.update(deltaTime);
+            if (effect.isFinished) {
+                this.activeVisualEffects.splice(i, 1);
+            }
         }
         // Render the scene regardless of game state (to show menus, etc.)
         this.renderer.render(this.scene, this.camera);
