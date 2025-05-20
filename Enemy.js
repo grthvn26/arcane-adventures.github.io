@@ -5,11 +5,12 @@ const ENEMY_MODEL_URL = 'https://play.rosebud.ai/assets/Skeleton_Warrior.glb?ymv
 const ENEMY_ATTACK_SOUND_URL = 'https://play.rosebud.ai/assets/03_Claw_03.wav?UIzl';
 const ENEMY_SCALE = 1.0; // Adjust as needed
 export class Enemy {
-    constructor(scene, player, initialPosition = new THREE.Vector3(0, 0, 0), audioListener) {
+    constructor(scene, player, initialPosition = new THREE.Vector3(0, 0, 0), audioListener, effectUpdaters = []) {
         this.scene = scene;
         this.player = player; // Reference to the player for AI later
         this.initialPosition = initialPosition; // Store the initial position
         this.audioListener = audioListener; // Store the audio listener
+        this.effectUpdaters = effectUpdaters; // Store the effect updaters array
         this.mesh = null;
         this.mixer = null;
         this.animations = {};
@@ -27,7 +28,7 @@ export class Enemy {
         this.targetPosition = new THREE.Vector3(); // For AI movement
         this.velocity = new THREE.Vector3();
         this.onGround = false;
-        this.attackDamage = 5; // Damage dealt by enemy - Updated to 5
+        this.attackDamage = 3; // Damage dealt by enemy - Updated to 5
         this.attackCooldown = 2.0; // Seconds between attacks
         this.lastAttackTime = -Infinity; // Time of last attack
         this.isAttacking = false; // Is enemy currently in an attack animation
@@ -35,8 +36,10 @@ export class Enemy {
         this.radius = 0.5; // Approximate radius for collision
         this.attackSoundBuffer = null;
         this.attackSound = null;
-        this.deathRemovalTimer = null; // Timer for delayed removal
-        this.deathLingerDuration = 1.5; // Seconds to linger after death animation
+        // this.deathRemovalTimer = null; // No longer used, removal handled by update loop
+        // this.deathLingerDuration = 1.5; // No longer used directly by a timer
+        this.deathAnimationCompleted = false; // Tracks if death animation has finished
+        this.deathSmokeEffect = null; // Stores the smoke effect instance for this enemy's death
         this._loadModel();
         this._loadSounds();
     }
@@ -66,6 +69,7 @@ export class Enemy {
     static playSpawnEffect(scene, position, effectUpdaters) {
         const effect = new SpawnSmokeEffect(scene, position);
         effectUpdaters.push(effect);
+        return effect; // Return the created effect instance
     }
     _loadModel() {
         const loader = new GLTFLoader();
@@ -170,21 +174,9 @@ export class Enemy {
                 } else if (e.action === this.animations['death']) {
                     // After death animation finishes, make non-interactive or remove
                     // For now, we'll just ensure it stays dead and might fade out later or be removed by a manager
-                    console.log("Skeleton death animation finished. Starting linger timer.");
-                    // Optionally, make the mesh invisible or start a fade-out effect here
-                    // this.scene.remove(this.mesh); // Or remove after a delay
-                    if (this.mesh) { // Check if mesh exists before scheduling removal
-                        this.deathRemovalTimer = setTimeout(() => {
-                            if (this.mesh && this.scene) { // Check again in case scene or mesh changed
-                                console.log("Removing skeleton mesh after linger.");
-                                this.scene.remove(this.mesh);
-                                // Consider disposing geometry/material here if truly done with this instance
-                                // e.g., if (this.mesh.geometry) this.mesh.geometry.dispose();
-                                // if (this.mesh.material) this.mesh.material.dispose(); // careful with shared materials
-                                this.mesh = null; // Nullify reference
-                            }
-                        }, this.deathLingerDuration * 1000);
-                    }
+                    console.log("Skeleton death animation finished. Waiting for smoke effect if any.");
+                    this.deathAnimationCompleted = true;
+                    // Mesh removal is now handled in the update loop after smoke effect also finishes.
                 }
             });
              // Attempt to set initial ground position after model loads
@@ -208,18 +200,38 @@ export class Enemy {
     }
 
     update(deltaTime, environment) {
-        if (!this.isAlive || !this.mixer) { // Mesh check is implicitly handled by isAlive and death flow
-             // If not alive, and mesh still exists, only mixer updates might be relevant (for death anim)
-             // But if deathRemovalTimer is set, it means death animation is done and it's just lingering.
-            if (this.isAlive && !this.mesh) return; // If alive but no mesh, something is wrong.
-            if (!this.isAlive && this.deathRemovalTimer && !this.mesh) return; // Dead, lingering, but mesh already removed.
-            // If not alive and death anim is playing, mixer still needs update.
-        }
-        if (this.mixer) { // Always update mixer if it exists
+        // 1. Update mixer (always, if exists, for animations like death)
+        if (this.mixer) {
             this.mixer.update(deltaTime);
         }
-        if (!this.isAlive) return; // No AI or movement updates if dead. Mixer update above handles death anim.
-        if (!this.mesh) return; // If mesh got removed (e.g. by death linger), no further updates.
+        // 2. Check for and handle despawn condition if enemy is dead and mesh exists
+        if (!this.isAlive && this.mesh) {
+            // Death animation is considered finished if flag is true, or if there was no death animation to begin with.
+            const animFinished = this.deathAnimationCompleted;
+            const smokeFinished = !this.deathSmokeEffect || this.deathSmokeEffect.isFinished;
+            if (animFinished && smokeFinished) {
+                console.log("Enemy despawn: Death animation and smoke effect complete. Removing mesh.");
+                if (this.scene) {
+                    this.scene.remove(this.mesh);
+                }
+                // TODO: Consider disposing geometry/materials here if they are unique and not shared.
+                // For example:
+                // if (this.mesh.geometry) this.mesh.geometry.dispose();
+                // this.mesh.traverse(child => {
+                //   if (child.isMesh && child.material) { /* dispose materials */ }
+                // });
+                this.mesh = null; // Nullify reference to stop further processing for this instance.
+            }
+        }
+        // 3. Early exit if mesh is gone (despawned or other issue)
+        if (!this.mesh) {
+            return; 
+        }
+        // 4. Early exit for AI/movement if dead but mesh still exists (death sequence playing)
+        if (!this.isAlive) {
+            return; 
+        }
+        // 5. Proceed with updates for ALIVE enemies with a MESH
         // Handle damage flash
         if (this.damageFlashTimer > 0) {
             this.damageFlashTimer -= deltaTime;
@@ -364,7 +376,16 @@ export class Enemy {
     die() {
         if (!this.isAlive) return;
         this.isAlive = false;
-        console.log("Enemy has died. Attempting to play death animation.");
+        console.log("Enemy has died. Initializing death sequence.");
+        // Play smoke effect for death
+        if (this.mesh && this.effectUpdaters && typeof Enemy.playSpawnEffect === 'function') {
+            this.deathSmokeEffect = Enemy.playSpawnEffect(this.scene, this.mesh.position, this.effectUpdaters);
+            console.log("Death smoke effect initiated.");
+        } else {
+            if (!this.mesh) console.warn("Death smoke effect: Enemy mesh is null.");
+            if (!this.effectUpdaters) console.warn("Death smoke effect: effectUpdaters array not provided to enemy.");
+            if (typeof Enemy.playSpawnEffect !== 'function') console.warn("Death smoke effect: Enemy.playSpawnEffect is not a function.");
+        }
         // Ensure material is reverted from any damage flash
         if (this.damageFlashTimer > 0) {
             this._revertMaterial();
@@ -387,11 +408,9 @@ export class Enemy {
             console.log(`Playing '${deathAction.getClip().name}' for death. Is running: ${deathAction.isRunning()}. Mixer time: ${this.mixer.time.toFixed(2)}`);
             // The 'finished' listener in _loadModel should handle removal after animation.
         } else {
-            console.log("No death animation found or mixer not available. Removing enemy mesh immediately.");
-            if (this.mesh && this.scene) {
-                this.scene.remove(this.mesh);
-                this.mesh = null; // Nullify reference
-            }
+            console.log("No death animation found or mixer not available. Will remove after smoke effect (if any).");
+            this.deathAnimationCompleted = true; // Mark animation as "done" since there isn't one
+            // Mesh removal is handled by the update loop
         }
     }
     _loadSounds() {
