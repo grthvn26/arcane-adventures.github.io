@@ -24,9 +24,9 @@ export class Player {
         this.maxHealth = 100;
         this.mana = 50;
         this.maxMana = 50;
-        this.attackManaCost = 10; // Mana cost per attack
+        this.attackManaCost = 5; // Mana cost per attack
         this.attackDamage = 15; // Amount of damage player's attack deals
-        this.attackRange = 1.8; // How close player needs to be to hit (adjust to match animation)
+        this.attackRange = 2.0; // How close player needs to be to hit (adjust to match animation)
 this.attackAngle = Math.PI / 2.5; // Cone of attack in front of player (90 degrees total, 45 each side)
 this.defenseDamageReduction = 0.5; // 50% damage reduction while defending
 this.mesh = null; // Initialize mesh as null, will be loaded async
