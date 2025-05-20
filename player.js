@@ -238,7 +238,12 @@ this._updateCameraRotation(0, 0); // Initial rotation setup
                 this.animations['attack_chop'].setLoop(THREE.LoopOnce);
                 console.log("1H_Melee_Attack_Chop animation loaded as 'attack_chop'.");
                 // We might need a separate event listener if it behaves differently
-                // For now, it will also reset isAttacking if it's the one playing and finishes.
+                this.mixer.addEventListener('finished', (e) => {
+                    if (e.action === this.animations['attack_chop']) {
+                        this.isAttacking = false; // Reset attack state for chop attack
+                        console.log("Attack_chop animation finished."); // Optional: for debugging
+                    }
+                });
              } else {
                 console.warn("1H_Melee_Attack_Chop animation not found in model.");
              }
@@ -339,14 +344,14 @@ this._updateCameraRotation(0, 0); // Initial rotation setup
             nextAction.enabled = true;
             if (targetActionName === 'attack') {
                 nextAction.setLoop(THREE.LoopOnce); // Ensure attack plays once
-                nextAction.clampWhenFinished = false; // Don't clamp attack, let it transition out
+                nextAction.clampWhenFinished = true; // Clamp attack to hold last frame for smoother transition
                 nextAction.play();
                 if (this.currentAction && this.currentAction !== nextAction) {
                     this.currentAction.fadeOut(0.1);
                 }
             } else if (targetActionName === 'attack_chop') { // Handle the new attack animation
                 nextAction.setLoop(THREE.LoopOnce);
-                nextAction.clampWhenFinished = false;
+                nextAction.clampWhenFinished = true; // Clamp attack_chop to hold last frame
                 nextAction.play();
                 if (this.currentAction && this.currentAction !== nextAction) {
                     this.currentAction.fadeOut(0.1);
