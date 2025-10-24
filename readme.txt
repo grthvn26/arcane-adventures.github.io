@@ -1,7 +1,5 @@
 Arcane Adventures (Three.js) V.01
 - Logic & Bugfixing by Rosebud AI 
-- HCI Group 2: Albufera, Arevalo, Balen, Gonao, Metal
-
 
 Arcane Adventures: Heroes of the Magic Realm" is an exciting 3D open-world sandbox game where players explore a magical world filled with action, adventure, and mystery. 
 Players start as young apprentices and unlock powerful magical classes, such as Elemental Mage, Beastmaster, Knight of Light, and Shadow Assassin, by completing quests, training with mentors, or performing good deeds in the world. 
@@ -36,3 +34,5 @@ Future:
 - Class System
 - Terrain Generation (For "open world")
 
+Known Bugs
+- Game not resetting
